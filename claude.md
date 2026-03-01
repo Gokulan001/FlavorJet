@@ -1,0 +1,1 @@
+When reporting information to me be extremely concise and scarifice grammer for sake of concision.

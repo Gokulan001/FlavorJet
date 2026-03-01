@@ -1,0 +1,63 @@
+"use client";
+
+import { useState } from "react";
+import { Zap, ChevronDown } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import type { TokenUsage } from "./types";
+
+interface TokenBadgeProps {
+  usage: TokenUsage;
+  model: string;
+}
+
+export default function TokenBadge({ usage, model }: TokenBadgeProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (usage.totalTokens === 0) return null;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono text-slate-400 hover:text-[#fea116] bg-slate-900/50 rounded-full border border-slate-700/50 hover:border-[#fea116]/30 transition-colors"
+      >
+        <Zap className="w-3 h-3" />
+        <span>{usage.totalTokens.toLocaleString()} tok</span>
+        <ChevronDown className={`w-2.5 h-2.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.95 }}
+            className="absolute bottom-full right-0 mb-2 w-48 p-3 bg-[#0f172b] border border-slate-700 rounded-xl shadow-xl text-[10px] font-mono text-slate-300 space-y-1.5 z-50"
+          >
+            <div className="flex justify-between">
+              <span className="text-slate-500">Model</span>
+              <span className="text-[#fea116]">{model}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Input</span>
+              <span>{usage.inputTokens.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Output</span>
+              <span>{usage.outputTokens.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Tool calls</span>
+              <span>{usage.toolCalls}</span>
+            </div>
+            <div className="h-px bg-slate-700" />
+            <div className="flex justify-between font-semibold">
+              <span className="text-slate-400">Total</span>
+              <span className="text-white">{usage.totalTokens.toLocaleString()}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}

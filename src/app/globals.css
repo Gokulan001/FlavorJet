@@ -1,26 +1,177 @@
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-primary: #fea116;
+  --color-primary-light: #f3c156;
+  --color-dark: #0f172b;
+  --color-light: #f1f8ff;
+  --font-poppins: var(--font-poppins);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 80px;
   }
+
+  body {
+    font-family: var(--font-poppins), system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* Hide scrollbar by default, show on hover/scroll */
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  html:hover {
+    scrollbar-color: #fea116 #f1f1f1;
+  }
+  html.dark:hover {
+    scrollbar-color: #fea116 #1e293b;
+  }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+  html:hover::-webkit-scrollbar-track { background: #f1f1f1; }
+  html:hover::-webkit-scrollbar-thumb { background: #fea116; }
+  html.dark:hover::-webkit-scrollbar-track { background: #1e293b; }
+  html.dark:hover::-webkit-scrollbar-thumb { background: #fea116; }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ── Animations ───────────────────────────────────────────────────────────── */
+@keyframes slideInLeft {
+  from { transform: translateX(-80px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(80px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { transform: translateY(30px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slowRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+/* ── AI Chat FAB Animations ───────────────────────────────────────────────── */
+@keyframes fabPulseGlow {
+  0%, 100% { box-shadow: 0 0 20px rgba(254, 161, 22, 0.3), 0 4px 12px rgba(254, 161, 22, 0.15); }
+  50% { box-shadow: 0 0 35px rgba(254, 161, 22, 0.5), 0 4px 24px rgba(254, 161, 22, 0.3); }
+}
+
+@keyframes fabRipple {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+@keyframes fabFloat {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-3px) scale(1.03); }
+}
+
+@keyframes fabSparkle {
+  0%, 100% { opacity: 0; transform: scale(0.5) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1) rotate(180deg); }
+}
+
+@keyframes fabBotBlink {
+  0%, 95%, 100% { transform: scaleY(1); }
+  97% { transform: scaleY(0.1); }
+}
+
+/* ── Voice & Chat Animations ──────────────────────────────────────────────── */
+@keyframes voicePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(254, 161, 22, 0.4); }
+  50% { box-shadow: 0 0 0 16px rgba(254, 161, 22, 0); }
+}
+
+@keyframes shimmerGold {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes chatPanelGlow {
+  0%, 100% { box-shadow: 0 0 40px rgba(254, 161, 22, 0.08), 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+  50% { box-shadow: 0 0 60px rgba(254, 161, 22, 0.12), 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+}
+
+@layer utilities {
+  .animate-slide-in-left { animation: slideInLeft 0.8s ease-out forwards; }
+  .animate-slide-in-right { animation: slideInRight 0.8s ease-out forwards; }
+  .animate-fade-in-up { animation: fadeInUp 0.6s ease-out forwards; }
+  .animate-fade-in { animation: fadeIn 0.6s ease-out forwards; }
+  .animate-slow-rotate { animation: slowRotate 50s linear infinite; }
+  .animate-float { animation: float 3s ease-in-out infinite; }
+
+  .animation-delay-100 { animation-delay: 0.1s; }
+  .animation-delay-200 { animation-delay: 0.2s; }
+  .animation-delay-300 { animation-delay: 0.3s; }
+  .animation-delay-400 { animation-delay: 0.4s; }
+  .animation-delay-500 { animation-delay: 0.5s; }
+  .animation-delay-600 { animation-delay: 0.6s; }
+
+  /* Hide scrollbar for horizontal scroll containers */
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* ── AI Chat FAB ─────────────────────────────────────────────────────── */
+  .ai-fab-glow {
+    animation: fabPulseGlow 2.5s ease-in-out infinite, fabFloat 3s ease-in-out infinite;
+  }
+  .ai-fab-glow::before,
+  .ai-fab-glow::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    animation: fabRipple 3s ease-out infinite;
+    border: 2px solid rgba(254, 161, 22, 0.4);
+    pointer-events: none;
+  }
+  .ai-fab-glow::after {
+    animation-delay: 1.5s;
+  }
+
+  /* ── FAB Bot Icon Blink ──────────────────────────────────────────────── */
+  .ai-fab-bot-icon {
+    animation: fabBotBlink 4s ease-in-out infinite;
+  }
+
+  /* ── Voice Mic Pulse ─────────────────────────────────────────────────── */
+  .voice-pulse {
+    animation: voicePulse 1.5s ease-in-out infinite;
+  }
+
+  /* ── Gold Shimmer Text ───────────────────────────────────────────────── */
+  .gold-shimmer {
+    background: linear-gradient(90deg, #fea116 25%, #f3c156 50%, #fea116 75%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmerGold 3s ease-in-out infinite;
+  }
+
+  /* ── Chat Panel Glow ─────────────────────────────────────────────────── */
+  .chat-panel-glow {
+    animation: chatPanelGlow 4s ease-in-out infinite;
+  }
 }
