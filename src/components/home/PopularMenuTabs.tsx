@@ -3,7 +3,9 @@
 import { useState } from "react";
 import Image from "next/image";
 import { Coffee, Sandwich, UtensilsCrossed } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn, formatPrice } from "@/lib/utils";
+import StaggerChildren from "@/components/animations/StaggerChildren";
 
 interface PopularItem {
   name: string;
@@ -60,35 +62,44 @@ export default function PopularMenuTabs({ breakfast, lunch, dinner }: PopularMen
         ))}
       </div>
 
-      {/* Menu Items Grid */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
-        {getItems().map((item, index) => (
-          <div
-            key={`${activeTab}-${index}`}
-            className="flex items-center gap-3 sm:gap-4 bg-white dark:bg-slate-800 rounded-xl p-3 sm:p-4 shadow-sm hover:shadow-md transition-all duration-300 hover:-translate-y-1 animate-fade-in-up"
-            style={{ animationDelay: `${index * 0.05}s`, animationFillMode: "both" }}
-          >
-            <div className="relative w-16 h-16 sm:w-20 sm:h-20 flex-shrink-0 rounded-xl overflow-hidden">
-              <Image
-                src={item.imageUrl}
-                alt={item.name}
-                fill
-                className="object-cover"
-                sizes="80px"
-              />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-start justify-between gap-2">
-                <h4 className="font-semibold text-sm text-[#0f172b] dark:text-white line-clamp-1">{item.name}</h4>
-                <span className="text-[#fea116] font-bold text-sm whitespace-nowrap">
-                  {formatPrice(item.price)}
-                </span>
+      {/* Menu Items Grid — with crossfade on tab switch */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activeTab}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.3, ease: "easeInOut" }}
+        >
+          <StaggerChildren staggerDelay={0.05} className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
+            {getItems().map((item, index) => (
+              <div
+                key={`${activeTab}-${index}`}
+                className="flex items-center gap-3 sm:gap-4 bg-white dark:bg-slate-800 rounded-xl p-3 sm:p-4 shadow-sm hover:shadow-md transition-all duration-300 hover:-translate-y-1"
+              >
+                <div className="relative w-16 h-16 sm:w-20 sm:h-20 flex-shrink-0 rounded-xl overflow-hidden">
+                  <Image
+                    src={item.imageUrl}
+                    alt={item.name}
+                    fill
+                    className="object-cover"
+                    sizes="80px"
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <h4 className="font-semibold text-sm text-[#0f172b] dark:text-white line-clamp-1">{item.name}</h4>
+                    <span className="text-[#fea116] font-bold text-sm whitespace-nowrap">
+                      {formatPrice(item.price)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-slate-400 line-clamp-2 mt-1">{item.description}</p>
+                </div>
               </div>
-              <p className="text-xs text-gray-500 dark:text-slate-400 line-clamp-2 mt-1">{item.description}</p>
-            </div>
-          </div>
-        ))}
-      </div>
+            ))}
+          </StaggerChildren>
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }

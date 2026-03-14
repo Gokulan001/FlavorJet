@@ -1,4 +1,5 @@
 import { ChefHat, UtensilsCrossed, ShoppingBag, Headphones } from "lucide-react";
+import StaggerChildren from "@/components/animations/StaggerChildren";
 
 const services = [
   {
@@ -25,17 +26,13 @@ const services = [
 
 export default function ServicesSection() {
   return (
-    <section className="py-16 lg:py-20 bg-[#f8f9fa] dark:bg-[#0b1120]">
+    <section className="py-20 lg:py-28">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 lg:gap-8">
-          {services.map((service, index) => (
+        <StaggerChildren staggerDelay={0.12} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 lg:gap-8">
+          {services.map((service) => (
             <div
               key={service.title}
-              className="group bg-white dark:bg-slate-800 rounded-2xl p-6 sm:p-8 text-center shadow-sm hover:shadow-xl transition-all duration-500 hover:-translate-y-2 animate-fade-in-up"
-              style={{
-                animationDelay: `${index * 0.15}s`,
-                animationFillMode: "both",
-              }}
+              className="group bg-white dark:bg-slate-800 rounded-2xl p-6 sm:p-8 text-center shadow-sm hover:shadow-xl transition-all duration-500 hover:-translate-y-2"
             >
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#fea116]/10 mb-6 group-hover:bg-[#fea116] transition-colors duration-300">
                 <service.icon className="w-8 h-8 text-[#fea116] group-hover:text-white transition-colors duration-300" />
@@ -44,7 +41,7 @@ export default function ServicesSection() {
               <p className="text-gray-500 dark:text-slate-400 text-sm leading-relaxed">{service.description}</p>
             </div>
           ))}
-        </div>
+        </StaggerChildren>
       </div>
     </section>
   );

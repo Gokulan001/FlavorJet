@@ -2,6 +2,7 @@
   "name": "flavorjet-v2",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -13,10 +14,14 @@
     "@ai-sdk/google": "^3.0.30",
     "@ai-sdk/openai": "^3.0.30",
     "@ai-sdk/react": "^3.0.99",
+    "@google/genai": "^1.44.0",
     "@lucia-auth/adapter-sqlite": "^3.0.2",
+    "@pinecone-database/pinecone": "^7.1.0",
+    "@supabase/supabase-js": "^2.98.0",
     "ai": "^6.0.97",
     "better-sqlite3": "^11.10.0",
     "cloudinary": "^2.9.0",
+    "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "framer-motion": "^12.34.0",
     "lucia": "^3.2.2",
@@ -35,6 +40,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

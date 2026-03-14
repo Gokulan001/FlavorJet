@@ -66,6 +66,31 @@ export interface PendingModifiers {
   selections: Record<string, number[]>; // groupName → selected modifier IDs
 }
 
+// ── Voice Modifier Session (group-by-group voice ordering) ──────────────────
+export interface VoiceModifierOptionData {
+  id: number;
+  name: string;
+  priceDelta: number;
+}
+
+export interface VoiceModifierGroupData {
+  id: number;
+  name: string;
+  required: boolean;
+  minSelect: number;
+  maxSelect: number;
+  options: VoiceModifierOptionData[];
+}
+
+export interface VoiceModifierSession {
+  slug: string;
+  itemName: string;
+  basePriceCents: number;
+  groups: VoiceModifierGroupData[];
+  currentGroupIndex: number;
+  selections: Record<string, number[]>; // groupId (string) → selected option IDs
+}
+
 // ── Orders ──────────────────────────────────────────────────────────────────
 export interface OrderItem {
   id: string;
@@ -93,50 +118,68 @@ export function makeUIMessage(
   };
 }
 
-export function extractItemIds(text: string): OrderItem[] | null {
-  const match = text.match(/ITEMS:([^\n]+)/);
-  if (!match) return null;
-  try {
-    return match[1].trim().split(";").map((item) => {
-      const parts = item.split(":");
-      const id = parts[0].trim();
-      const quantity = parseInt(parts[1]?.trim()) || 1;
-      const modifiers = parts[2]
-        ? parts[2].split(",").map((m) => parseInt(m.trim())).filter(Boolean)
-        : undefined;
-      return { id, quantity, modifiers };
-    });
-  } catch {
-    return null;
-  }
-}
-
-export function extractModifiers(
-  text: string
-): { itemId: number; itemName: string; itemPrice: string; groups: ModifierGroup[] } | null {
-  const match = text.match(/MODIFIERS:(\d+)\|([^|]+)\|([^|]+)\|(.+)/);
-  if (!match) return null;
-  try {
-    const itemId = parseInt(match[1]);
-    const itemName = match[2];
-    const itemPrice = match[3];
-    const groupsJson = JSON.parse(match[4]);
-    return { itemId, itemName, itemPrice, groups: groupsJson };
-  } catch {
-    return null;
-  }
-}
-
-export function cleanMarkers(text: string): string {
-  return text
-    .replace(/\s*ITEMS:[^\n]+/g, "")
-    .replace(/\s*MODIFIERS:[^\n]+/g, "")
-    .trim();
-}
-
 // ── localStorage Keys ───────────────────────────────────────────────────────
 export const STORAGE_KEYS = {
-  hasOnboarded: "fj-ai-onboarded",
   preferredMode: "fj-ai-mode",
   preferredLang: "fj-ai-lang",
+  pendingQueue: "fj-ai-pending-queue",
 } as const;
+
+// ── Pending Queue (multi-intent order tracking) ────────────────────────────
+export type ItemStatus =
+  | "searching"
+  | "needs_clarification"
+  | "awaiting_modifier"
+  | "modifier_done"
+  | "added"
+  | "not_found";
+
+export interface PendingItem {
+  id: string;
+  rawName: string;
+  qty: number;
+  slug?: string;
+  itemId?: number;
+  status: ItemStatus;
+  modifiers?: { groupId: number; optionId: number }[];
+}
+
+export interface PendingQueue {
+  items: PendingItem[];
+  focusId: string | null;
+}
+
+// ── Cart Context (injected into system prompt) ─────────────────────────────
+export interface CartContext {
+  items: { name: string; qty: number; price: string; slug: string }[];
+  total: string;
+}
+
+// ── Full Cart Item (rich data for sidebar display & editing) ───────────────
+export interface FullCartItem {
+  id: number;
+  quantity: number;
+  specialInstructions: string | null;
+  menuItemId: number;
+  itemName: string;
+  itemSlug: string;
+  itemPrice: number;
+  itemImage: string | null;
+  modifiers: { id: number; name: string; priceAdjustment: number; groupName: string }[];
+  unitPrice: number;
+  lineTotal: number;
+}
+
+// ── Minimal Menu Item (what AI tool results return) ────────────────────────
+export interface MinimalMenuItem {
+  id: number;
+  name: string;
+  price: string;
+  slug: string;
+  imageUrl: string;
+  rating: string;
+  hasModifiers: boolean;
+  vegan: boolean;
+  vegetarian: boolean;
+  glutenFree: boolean;
+}

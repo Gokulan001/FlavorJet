@@ -5,9 +5,9 @@ import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import ToastProvider from "@/components/ui/ToastProvider";
 import ThemeProvider from "@/components/ThemeProvider";
-import ChatWidget from "@/components/chat/ChatWidget";
 import { verifyAuth } from "@/lib/auth";
 import { getCartCountForUser } from "@/lib/cart-utils";
+import AIFloatingButton from "@/components/chat/AIFloatingButton";
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -46,9 +46,9 @@ export default async function RootLayout({
         <ThemeProvider>
           <ToastProvider>
             <Navbar user={userData} cartCount={cartCount} />
-            <main className="min-h-screen">{children}</main>
+            <main className="min-h-screen pt-20">{children}</main>
             <Footer />
-            <ChatWidget user={userData ? { username: userData.username } : null} />
+            <AIFloatingButton />
           </ToastProvider>
         </ThemeProvider>
       </body>
