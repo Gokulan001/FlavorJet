@@ -4,6 +4,8 @@ import { ArrowRight } from "lucide-react";
 import { db } from "@/db";
 import { categories } from "@/db/schema";
 import { asc } from "drizzle-orm";
+import StaggerChildren from "@/components/animations/StaggerChildren";
+import ShinyText from "@/components/reactbits/ShinyText";
 
 export default function CategoriesSection() {
   const allCategories = db
@@ -14,13 +16,13 @@ export default function CategoriesSection() {
     .all();
 
   return (
-    <section className="py-16 lg:py-20 bg-white dark:bg-[#0b1120]" id="categories">
+    <section className="py-20 lg:py-28" id="categories">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="flex items-end justify-between mb-8 sm:mb-12">
           <div>
-            <p className="text-[#fea116] font-medium tracking-wider uppercase mb-2">
-              Popular Categories
+            <p className="font-medium tracking-wider uppercase mb-2">
+              <ShinyText text="Popular Categories" speed={4} className="text-sm" />
             </p>
             <h2 className="text-3xl sm:text-4xl font-bold text-[#0f172b] dark:text-white">
               Browse Our Hottest
@@ -37,17 +39,13 @@ export default function CategoriesSection() {
         </div>
 
         {/* Categories Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6">
-          {allCategories.map((category, index) => (
+        <StaggerChildren className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6">
+          {allCategories.map((category) => (
             <Link
               key={category.id}
               href={`/menu/${category.slug}`}
-              className="group relative rounded-2xl p-4 sm:p-5 lg:p-6 text-center transition-all duration-300 hover:-translate-y-2 hover:shadow-xl animate-fade-in-up dark:!bg-slate-800"
-              style={{
-                backgroundColor: category.bgColor,
-                animationDelay: `${index * 0.1}s`,
-                animationFillMode: "both",
-              }}
+              className="group relative rounded-2xl p-4 sm:p-5 lg:p-6 text-center transition-all duration-300 hover:-translate-y-2 hover:shadow-xl dark:!bg-slate-800"
+              style={{ backgroundColor: category.bgColor }}
             >
               <div className="relative w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 rounded-full overflow-hidden">
                 <Image
@@ -67,7 +65,7 @@ export default function CategoriesSection() {
               <ArrowRight className="w-4 h-4 text-[#fea116] mx-auto opacity-0 group-hover:opacity-100 transition-all duration-300 group-hover:translate-x-1" />
             </Link>
           ))}
-        </div>
+        </StaggerChildren>
 
         {/* Mobile See All */}
         <div className="flex sm:hidden justify-center mt-8">

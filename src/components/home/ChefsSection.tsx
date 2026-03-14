@@ -1,21 +1,23 @@
 import Image from "next/image";
 import { Facebook, Twitter, Instagram } from "lucide-react";
+import StaggerChildren from "@/components/animations/StaggerChildren";
+import ShinyText from "@/components/reactbits/ShinyText";
 
 const chefs = [
-  { name: "Chef Adam", designation: "Executive Chef", image: "/team-1.jpg" },
-  { name: "Chef Rachel", designation: "Head Pastry Chef", image: "/team-2.jpg" },
-  { name: "Chef Marcus", designation: "Sous Chef", image: "/team-3.jpg" },
-  { name: "Chef Elena", designation: "Grill Master", image: "/team-4.jpg" },
+  { name: "Chef Clark", designation: "Executive Chef", image: "/team-1.jpg" },
+  { name: "Chef Bruce", designation: "Head Pastry Chef", image: "/team-2.jpg" },
+  { name: "Chef John", designation: "Sous Chef", image: "/team-3.jpg" },
+  { name: "Chef Ben", designation: "Grill Master", image: "/team-4.jpg" },
 ];
 
 export default function ChefsSection() {
   return (
-    <section className="py-16 lg:py-20 bg-white dark:bg-[#0b1120]">
+    <section className="py-20 lg:py-28">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="text-center mb-8 sm:mb-12">
-          <p className="text-[#fea116] font-medium tracking-wider uppercase mb-2">
-            Team Members
+          <p className="font-medium tracking-wider uppercase mb-2">
+            <ShinyText text="Team Members" speed={4} className="text-sm" />
           </p>
           <h2 className="text-3xl sm:text-4xl font-bold text-[#0f172b] dark:text-white">
             Our Master Chefs
@@ -23,13 +25,9 @@ export default function ChefsSection() {
         </div>
 
         {/* Chefs Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8">
-          {chefs.map((chef, index) => (
-            <div
-              key={chef.name}
-              className="group text-center animate-fade-in-up"
-              style={{ animationDelay: `${index * 0.15}s`, animationFillMode: "both" }}
-            >
+        <StaggerChildren className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8">
+          {chefs.map((chef) => (
+            <div key={chef.name} className="group text-center">
               <div className="relative overflow-hidden rounded-2xl mb-6 shadow-lg">
                 <Image
                   src={chef.image}
@@ -56,7 +54,7 @@ export default function ChefsSection() {
               <p className="text-[#fea116] text-sm">{chef.designation}</p>
             </div>
           ))}
-        </div>
+        </StaggerChildren>
       </div>
     </section>
   );

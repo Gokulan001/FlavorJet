@@ -1,12 +1,13 @@
-import { streamText, convertToModelMessages, tool, stepCountIs } from "ai";
-import type { UIMessage, ModelMessage } from "ai";
-import { z } from "zod";
+import { streamText, convertToModelMessages, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from "ai";
+import type { UIMessage } from "ai";
 import { getModel } from "@/lib/ai/providers";
 import { buildSystemPrompt, type Language, type WeatherData } from "@/lib/ai/system-prompt";
-import { searchMenu, getCategoryItems, getItemDetails, getPopularItems } from "@/lib/ai/menu-context";
+import { createRAGTools } from "@/lib/rag/tools";
+import { detectIntent, getToolsForIntent } from "@/lib/ai/intent-router";
+import type { CartContext, PendingQueue } from "@/components/chat/types";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-// Extract text content from a UIMessage's parts array
+
 function getUIMessageText(msg: UIMessage): string {
   return msg.parts
     .filter((p): p is { type: "text"; text: string } => p.type === "text")
@@ -14,28 +15,129 @@ function getUIMessageText(msg: UIMessage): string {
     .join("");
 }
 
+// ── Strip imageUrl from tool outputs (saves ~400-600 tokens per turn) ────────
+// imageUrl is only needed by the frontend for rendering cards, not by the AI.
+
+function stripImagesFromToolOutputs(messages: UIMessage[]): UIMessage[] {
+  return messages.map((msg) => ({
+    ...msg,
+    parts: msg.parts.map((part) => {
+      if (!part.type.startsWith("tool-")) return part;
+
+      const tp = part as unknown as { type: string; state: string; output?: unknown };
+      if (tp.state !== "output-available" || !tp.output) return part;
+
+      const output = tp.output as Record<string, unknown>;
+      if (!output.items || !Array.isArray(output.items)) return part;
+
+      // Remove imageUrl from each item in the output
+      const stripped = {
+        ...output,
+        items: (output.items as Record<string, unknown>[]).map(({ imageUrl: _u, ...rest }) => rest),
+      };
+
+      return { ...part, output: stripped } as unknown as typeof part;
+    }),
+  }));
+}
+
+// ── Extract image context from assistant response ────────────────────────────
+// Looks at what the assistant identified in the image, then adds that as text
+// context when we strip the image data. This preserves conversational context.
+
+function extractImageContext(assistantResponse: string): string | null {
+  // Try to find common food item names the assistant would mention
+  const patterns = [
+    /we have\s+(?:a\s+)?([^.!]+?)(?:\s+\(|[.!]|—|—|with|for)/i,
+    /yes[^.]*?(?:we\s+)?(?:have|offer)\s+(?:a\s+)?([^.!]+?)(?:\s+\(|[.!]|—|with)/i,
+    /that's\s+(?:a\s+)?([^.!]+?)(?:\s+\(|[.!]|—|with)/i,
+    /looks like\s+(?:a\s+)?([^.!]+?)(?:\s+\(|[.!]|—|with)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = assistantResponse.match(pattern);
+    if (match && match[1]) {
+      return `[Image: ${match[1].trim()}]`;
+    }
+  }
+
+  // Fallback: detect intent from keywords
+  if (assistantResponse.match(/don't have|not on menu/i)) {
+    return `[Image: searched item (not on menu)]`;
+  }
+  if (assistantResponse.match(/cannot|unclear|non-food|appropriate/i)) {
+    return `[Non-food or unclear image]`;
+  }
+
+  // Last resort
+  return `[Food image]`;
+}
+
+// ── Strip uploaded image data from older messages (saves tokens) ─────────────
+// Only keeps file parts in the most recent message that contains them.
+// When stripping older images, adds text context extracted from the assistant's
+// response so follow-up questions have context about what was in the image.
+
+function stripOldImageParts(messages: UIMessage[]): UIMessage[] {
+  let lastImageIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].parts.some((p) => p.type === "file")) {
+      lastImageIdx = i;
+      break;
+    }
+  }
+  if (lastImageIdx === -1) return messages;
+
+  return messages.map((msg, idx) => {
+    if (idx === lastImageIdx) return msg;
+    if (!msg.parts.some((p) => p.type === "file")) return msg;
+
+    // If this user message has an image, look at the next assistant message
+    // to extract context, then replace image with that context as text
+    const hasImage = msg.parts.some((p) => p.type === "file");
+    if (hasImage) {
+      // Find the next assistant message
+      const nextMsgIdx = idx + 1;
+      const nextMsg = nextMsgIdx < messages.length ? messages[nextMsgIdx] : null;
+
+      if (nextMsg && nextMsg.role === "assistant") {
+        const assistantText = getUIMessageText(nextMsg);
+        const context = extractImageContext(assistantText);
+
+        if (context) {
+          // Replace image parts with text context
+          const withoutImage = msg.parts.filter((p) => p.type !== "file");
+          const contextPart: { type: "text"; text: string } = {
+            type: "text",
+            text: context,
+          };
+
+          return {
+            ...msg,
+            parts: [contextPart, ...withoutImage],
+          };
+        }
+      }
+    }
+
+    // Fallback: just remove image with no context
+    return { ...msg, parts: msg.parts.filter((p) => p.type !== "file") };
+  });
+}
+
 // ── Message History Compression ──────────────────────────────────────────────
-// Keeps last N messages, compresses older ones into a summary line.
-// Saves ~200-500 tokens per request on long conversations.
 
 function optimizeUIHistory(
   messages: UIMessage[],
-  keepLast: number = 8
+  keepLast: number = 5
 ): UIMessage[] {
-  if (messages.length <= keepLast) return messages;
+  // Strip tool output image URLs + old uploaded image parts
+  const stripped = stripOldImageParts(stripImagesFromToolOutputs(messages));
 
-  const older = messages.slice(0, -keepLast);
-  const recent = messages.slice(-keepLast);
+  if (stripped.length <= keepLast) return stripped;
 
-  // Compress older messages into a brief summary
-  const orderMentions: string[] = [];
-  for (const msg of older) {
-    const text = getUIMessageText(msg);
-    if (msg.role === "assistant" && text.includes("ITEMS:")) {
-      const match = text.match(/ITEMS:([^\n]+)/);
-      if (match) orderMentions.push(`Previous order: ${match[1]}`);
-    }
-  }
+  const older = stripped.slice(0, -keepLast);
+  const recent = stripped.slice(-keepLast);
 
   const userTopics = older
     .filter((m) => m.role === "user")
@@ -43,7 +145,7 @@ function optimizeUIHistory(
     .slice(-3);
 
   const summary =
-    `[Earlier in conversation: User discussed: ${userTopics.join("; ")}. ${orderMentions.join(". ")}]`.trim();
+    `[Earlier: User asked about: ${userTopics.join("; ")}]`.trim();
 
   const summaryMessage: UIMessage = {
     id: "summary",
@@ -59,79 +161,65 @@ function optimizeUIHistory(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { messages, language, weather } = body as {
+    const { messages, language, weather, cartContext, pendingQueue, isVoiceMode } = body as {
       messages: UIMessage[];
       language?: Language;
       weather?: WeatherData | null;
+      cartContext?: CartContext | null;
+      pendingQueue?: PendingQueue | null;
+      isVoiceMode?: boolean;
     };
 
-    const systemPrompt = buildSystemPrompt(language || "en", weather);
-    const optimizedMessages = optimizeUIHistory(messages);
+    // Detect intent from last user message
+    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+    const lastText = lastUserMsg ? getUIMessageText(lastUserMsg) : "";
+    const hasImage = lastUserMsg?.parts.some((p) => p.type === "file") ?? false;
+    const intent = detectIntent(lastText, hasImage);
 
-    // Convert UIMessages → ModelMessages for streamText
+    // Get only relevant tools for this intent
+    const allTools = createRAGTools();
+    const tools = getToolsForIntent(intent, allTools);
+
+    const toolCount = Object.keys(tools).length;
+    console.log(`[Chat] intent:${intent} hasImage:${hasImage} tools:${toolCount} msgs:${messages.length}`);
+
+    const systemPrompt = await buildSystemPrompt(language || "en", weather, cartContext, pendingQueue, undefined, hasImage, isVoiceMode);
+    const filtered = messages.filter((m) => m.id !== "welcome");
+    const optimizedMessages = optimizeUIHistory(filtered);
     const modelMessages = await convertToModelMessages(optimizedMessages);
+
+    let inputTokens = 0, outputTokens = 0, toolCallCount = 0;
 
     const result = streamText({
       model: getModel(),
       system: systemPrompt,
       messages: modelMessages,
-      maxOutputTokens: 1024,
+      maxOutputTokens: isVoiceMode ? 200 : 512,
       temperature: 0.7,
-      stopWhen: stepCountIs(5), // Allow up to 5 tool call steps
-
-      tools: {
-        search_menu: tool({
-          description:
-            "Search the restaurant menu for items matching a keyword. Use this when user asks about specific food, mentions a dish name, or wants recommendations.",
-          inputSchema: z.object({
-            query: z.string().describe("Food name or keyword to search, e.g. 'burger', 'spicy', 'salad'"),
-          }),
-          execute: async ({ query }) => {
-            const results = searchMenu(query);
-            if (results.length === 0) return { found: false, message: "No items match that search." };
-            return { found: true, items: results };
-          },
-        }),
-
-        get_category_items: tool({
-          description:
-            "Get all available items in a menu category. Use when user asks to see a category like 'show me burgers' or 'what pizzas do you have'.",
-          inputSchema: z.object({
-            category: z.string().describe("Category name, e.g. 'Burgers', 'Pizza', 'Desserts'"),
-          }),
-          execute: async ({ category }) => {
-            const items = getCategoryItems(category);
-            if (items.length === 0) return { found: false, message: `No items found in "${category}" category.` };
-            return { found: true, items };
-          },
-        }),
-
-        get_item_details: tool({
-          description:
-            "Get full details of a specific menu item including modifiers/customization options. Use when user wants details about a specific item or you need to check if it has modifiers before ordering.",
-          inputSchema: z.object({
-            itemId: z.number().describe("The numeric ID of the menu item"),
-          }),
-          execute: async ({ itemId }) => {
-            const item = getItemDetails(itemId);
-            if (!item) return { found: false, message: "Item not found." };
-            return { found: true, item };
-          },
-        }),
-
-        get_popular_items: tool({
-          description:
-            "Get the most popular/highest-rated items across all categories. Use when user asks for recommendations, 'what's good', or 'best sellers'.",
-          inputSchema: z.object({}),
-          execute: async () => {
-            const items = getPopularItems();
-            return { items };
-          },
-        }),
+      stopWhen: stepCountIs(5),
+      tools,
+      onStepFinish({ usage, toolCalls }) {
+        inputTokens += usage?.inputTokens ?? 0;
+        outputTokens += usage?.outputTokens ?? 0;
+        toolCallCount += (toolCalls?.length ?? 0);
       },
     });
 
-    return result.toUIMessageStreamResponse();
+    const stream = createUIMessageStream({
+      execute: async ({ writer }) => {
+        writer.merge(result.toUIMessageStream());
+        await result.usage;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (writer as any).write({
+          type: "data-token-usage",
+          id: "token-usage",
+          data: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, toolCalls: toolCallCount },
+        });
+      },
+      onError: () => "An error occurred",
+    });
+
+    return createUIMessageStreamResponse({ stream });
   } catch (error) {
     console.error("[Chat API] Error:", error);
     return new Response(

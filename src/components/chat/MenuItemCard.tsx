@@ -1,52 +1,54 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Star, ShoppingCart, ChevronRight, Flame, Sparkles, Zap } from "lucide-react";
+import { Star, ShoppingCart, Settings2 } from "lucide-react";
 import Image from "next/image";
-
-export interface MenuItemData {
-  id: number;
-  name: string;
-  price: string;
-  rating: string;
-  description: string;
-  category: string;
-  categorySlug: string;
-  itemSlug: string;
-  imageUrl: string;
-  badge: string;
-  hasModifiers: boolean;
-  customizeUrl: string;
-}
+import type { MinimalMenuItem } from "./types";
 
 interface MenuItemCardProps {
-  item: MenuItemData;
+  item: MinimalMenuItem;
   index: number;
-  onQuickAdd?: (itemId: number) => void;
-  onViewDetails?: (url: string) => void;
+  onAddToCart?: (slug: string) => void;
+  onCustomize?: (slug: string) => void;
 }
 
-function BadgeIcon({ badge }: { badge: string }) {
-  if (badge.includes("Bestseller")) return <Flame className="w-3 h-3" />;
-  if (badge.includes("Spicy")) return <Zap className="w-3 h-3" />;
-  if (badge.includes("New")) return <Sparkles className="w-3 h-3" />;
-  return null;
+function DietaryBadges({ item }: { item: MinimalMenuItem }) {
+  const badges: { label: string; color: string }[] = [];
+  if (item.vegan) badges.push({ label: "VG", color: "bg-green-500" });
+  else if (item.vegetarian) badges.push({ label: "V", color: "bg-emerald-500" });
+  if (item.glutenFree) badges.push({ label: "GF", color: "bg-blue-500" });
+  if (badges.length === 0) return null;
+
+  return (
+    <div className="absolute top-1.5 left-1.5 flex gap-0.5">
+      {badges.map((b) => (
+        <span
+          key={b.label}
+          className={`${b.color} text-white text-[7px] font-bold px-1 py-0.5 rounded-full leading-none`}
+        >
+          {b.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
-function badgeColor(badge: string): string {
-  if (badge.includes("Bestseller")) return "bg-orange-500/90 text-white";
-  if (badge.includes("Spicy")) return "bg-red-500/90 text-white";
-  if (badge.includes("New")) return "bg-emerald-500/90 text-white";
-  return "bg-gray-500/90 text-white";
-}
+export default function MenuItemCard({ item, index, onAddToCart, onCustomize }: MenuItemCardProps) {
+  const handleCardClick = () => {
+    if (item.hasModifiers) {
+      onCustomize?.(item.slug);
+    } else {
+      onAddToCart?.(item.slug);
+    }
+  };
 
-export default function MenuItemCard({ item, index, onQuickAdd, onViewDetails }: MenuItemCardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ delay: index * 0.06, type: "spring", stiffness: 400, damping: 30 }}
-      className="group relative w-[155px] flex-shrink-0 bg-white dark:bg-slate-800/90 rounded-2xl border border-gray-100 dark:border-slate-700/50 overflow-hidden shadow-sm hover:shadow-md hover:shadow-[#fea116]/10 transition-all hover:-translate-y-0.5"
+      onClick={handleCardClick}
+      className="group relative w-[155px] flex-shrink-0 bg-white/85 dark:bg-slate-800/85 backdrop-blur-lg rounded-3xl border border-white/70 dark:border-slate-700/50 overflow-hidden shadow-lg shadow-slate-200/50 dark:shadow-slate-900/40 hover:shadow-2xl hover:shadow-[#fea116]/20 transition-all duration-200 hover:-translate-y-2 cursor-pointer"
     >
       {/* Image */}
       <div className="relative h-[90px] bg-gradient-to-br from-[#fea116]/10 to-[#fea116]/5 overflow-hidden">
@@ -59,16 +61,13 @@ export default function MenuItemCard({ item, index, onQuickAdd, onViewDetails }:
             sizes="155px"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-3xl">🍽️</div>
-        )}
-
-        {/* Badge */}
-        {item.badge && (
-          <div className={`absolute top-1.5 left-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8px] font-bold ${badgeColor(item.badge)}`}>
-            <BadgeIcon badge={item.badge} />
-            <span>{item.badge.replace(/🔥|🌶️|✨/g, "").trim()}</span>
+          <div className="w-full h-full flex items-center justify-center text-3xl">
+            <span role="img" aria-label="food">&#127869;</span>
           </div>
         )}
+
+        {/* Dietary badges */}
+        <DietaryBadges item={item} />
 
         {/* Rating pill */}
         <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 px-1.5 py-0.5 bg-black/60 backdrop-blur-sm rounded-full">
@@ -78,25 +77,29 @@ export default function MenuItemCard({ item, index, onQuickAdd, onViewDetails }:
       </div>
 
       {/* Content */}
-      <div className="p-2.5 space-y-1.5">
-        <h4 className="text-[11px] font-bold text-[#0f172b] dark:text-white leading-tight line-clamp-2 min-h-[28px]">
+      <div className="p-2 space-y-1">
+        <h4 className="text-[11px] font-bold text-slate-900 dark:text-white leading-tight line-clamp-2 min-h-[20px]">
           {item.name}
         </h4>
         <div className="flex items-center justify-between">
           <span className="text-sm font-extrabold text-[#fea116]">{item.price}</span>
           {item.hasModifiers ? (
             <button
-              onClick={() => onViewDetails?.(item.customizeUrl || `/menu/${item.categorySlug}/${item.itemSlug}`)}
-              className="p-1.5 rounded-lg bg-[#fea116]/10 text-[#fea116] hover:bg-[#fea116]/20 transition-colors"
+              onClick={(e) => { e.stopPropagation(); onCustomize?.(item.slug); }}
+              className="p-1.5 rounded-lg bg-[#fea116]/15 text-[#fea116] border border-[#fea116]/30
+                hover:bg-[#fea116]/25 hover:border-[#fea116]/50 hover:shadow-lg hover:shadow-[#fea116]/30
+                transition-all duration-200"
               title="Customize"
             >
-              <ChevronRight className="w-3.5 h-3.5" />
+              <Settings2 className="w-3.5 h-3.5" />
             </button>
           ) : (
             <button
-              onClick={() => onQuickAdd?.(item.id)}
-              className="p-1.5 rounded-lg bg-[#fea116] text-[#0f172b] hover:bg-[#f3c156] transition-colors shadow-sm"
-              title="Quick add"
+              onClick={(e) => { e.stopPropagation(); onAddToCart?.(item.slug); }}
+              className="p-1.5 rounded-lg bg-[#fea116] text-slate-900 border border-[#fea116]
+                hover:bg-[#f3c156] hover:shadow-lg hover:shadow-[#fea116]/40
+                transition-all duration-200"
+              title="Add to cart"
             >
               <ShoppingCart className="w-3.5 h-3.5" />
             </button>

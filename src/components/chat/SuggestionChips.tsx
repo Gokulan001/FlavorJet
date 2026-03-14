@@ -9,12 +9,12 @@ interface SuggestionChipsProps {
 
 const container = {
   hidden: {},
-  show: { transition: { staggerChildren: 0.06 } },
+  show: { transition: { staggerChildren: 0.05 } },
 };
 
 const chip = {
-  hidden: { opacity: 0, y: 8, scale: 0.95 },
-  show: { opacity: 1, y: 0, scale: 1 },
+  hidden: { opacity: 0, scale: 0.9 },
+  show: { opacity: 1, scale: 1 },
 };
 
 export default function SuggestionChips({ suggestions, onSelect }: SuggestionChipsProps) {
@@ -27,14 +27,17 @@ export default function SuggestionChips({ suggestions, onSelect }: SuggestionChi
       animate="show"
       className="flex flex-wrap gap-2 px-1"
     >
-      {suggestions.map((text, i) => (
+      {suggestions.map((text) => (
         <motion.button
           key={text}
           variants={chip}
-          whileHover={{ scale: 1.04 }}
-          whileTap={{ scale: 0.96 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
           onClick={() => onSelect(text)}
-          className="px-3.5 py-1.5 text-xs font-medium rounded-full border border-[#fea116]/30 text-[#fea116] bg-[#fea116]/5 hover:bg-[#fea116]/10 dark:border-[#fea116]/20 dark:bg-[#fea116]/5 transition-colors"
+          className="px-4 py-2 rounded-full text-xs font-medium
+            text-[#fea116] border border-[#fea116]/40
+            hover:bg-[#fea116]/10 hover:border-[#fea116]/60
+            transition-colors duration-150"
         >
           {text}
         </motion.button>

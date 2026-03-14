@@ -7,8 +7,8 @@ import { anthropic } from "@ai-sdk/anthropic";
 
 export const MODELS = {
   google: {
-    name: "Gemini 2.5 Flash",
-    model: google("gemini-2.5-flash"),
+    name: "Gemini 2.5 Flash Lite",
+    model: google("gemini-2.5-flash-lite"),
   },
   openai: {
     name: "GPT-4o Mini",

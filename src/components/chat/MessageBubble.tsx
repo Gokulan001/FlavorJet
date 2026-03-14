@@ -1,89 +1,142 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
-import { Bot } from "lucide-react";
+import { User, ExternalLink, ChevronRight } from "lucide-react";
+import Image from "next/image";
 import type { UIMessage } from "ai";
-import { getMessageText, cleanMarkers } from "./types";
-import MenuItemCard, { type MenuItemData } from "./MenuItemCard";
+import { getMessageText } from "./types";
+import type { MinimalMenuItem } from "./types";
+import MenuItemCard from "./MenuItemCard";
 
 interface MessageBubbleProps {
   message: UIMessage;
   index: number;
-  onQuickAdd?: (itemId: number) => void;
-  onViewDetails?: (url: string) => void;
+  onAddToCart?: (slug: string) => void;
+  onCustomize?: (slug: string) => void;
+  userProfilePicture?: string | null;
 }
 
-// ── Extract structured menu items from tool result parts ─────────────────────
-// AI SDK v6 tool parts have type `tool-${toolName}` with state/input/output fields
-function extractMenuItems(message: UIMessage): MenuItemData[] {
-  const items: MenuItemData[] = [];
+// ── Extract MinimalMenuItem[] from tool-result parts ────────────────────────
+// Two-pass algorithm:
+// Pass 1: collect slugs of items successfully added to cart (from tool-add_to_cart)
+// Pass 2: collect items from all other tools, excluding already-added slugs
+// This prevents added items from appearing as browsing cards.
+
+function extractMenuItems(message: UIMessage): MinimalMenuItem[] {
+  const addedSlugs = new Set<string>();
+  const items: MinimalMenuItem[] = [];
   const seenIds = new Set<number>();
 
+  // Pass 1: collect addedSlugs from successful add_to_cart results
   for (const part of message.parts) {
-    // Tool parts have type starting with "tool-"
-    if (!part.type.startsWith("tool-")) continue;
+    if (part.type !== "tool-add_to_cart") continue;
+    const toolPart = part as unknown as { state: string; output?: unknown };
+    if (toolPart.state !== "output-available" || !toolPart.output) continue;
+    const result = toolPart.output as Record<string, unknown>;
+    if (result.addedSlugs && Array.isArray(result.addedSlugs)) {
+      for (const slug of result.addedSlugs as string[]) {
+        addedSlugs.add(slug);
+      }
+    }
+  }
 
-    // Cast through unknown to access the SDK's tool part shape
+  // Pass 2: collect items from all item-returning tools, excluding added slugs
+  for (const part of message.parts) {
+    if (!part.type.startsWith("tool-") || part.type === "tool-add_to_cart") continue;
+
+    // AI SDK v6: ToolUIPart has type "tool-{name}", state "output-available", output at top level
     const toolPart = part as unknown as {
       type: string;
       state: string;
       output?: unknown;
     };
 
-    // Only process completed tool calls with output
-    if (toolPart.state !== "result" || !toolPart.output) continue;
-
+    if (toolPart.state !== "output-available" || !toolPart.output) continue;
     const result = toolPart.output as Record<string, unknown>;
 
-    // Handle tools that return { items: [...] } — search_menu, get_category_items, get_popular_items
     if (result.items && Array.isArray(result.items)) {
       for (const item of result.items) {
-        if (item && typeof item === "object" && "id" in item && !seenIds.has(item.id as number)) {
-          seenIds.add(item.id as number);
-          items.push(item as MenuItemData);
+        if (item && typeof item === "object" && "id" in item && "slug" in item) {
+          const id = (item as { id: number }).id;
+          const slug = (item as { slug: string }).slug;
+          if (!seenIds.has(id) && !addedSlugs.has(slug)) {
+            seenIds.add(id);
+            items.push(item as MinimalMenuItem);
+          }
         }
       }
-    }
-
-    // Handle get_item_details which returns { item: {...} }
-    if (
-      result.item &&
-      typeof result.item === "object" &&
-      "id" in (result.item as Record<string, unknown>) &&
-      !seenIds.has((result.item as { id: number }).id)
-    ) {
-      seenIds.add((result.item as { id: number }).id);
-      items.push(result.item as MenuItemData);
     }
   }
 
   return items;
 }
 
-// ── Simple markdown-like formatting ──────────────────────────────────────────
+// ── Parse line segments into bold, URLs, plain text ─────────────────────────
+
+function parseSegments(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*|https?:\/\/[^\s]+)/g);
+
+  return parts.map((p, j) => {
+    if (p.startsWith("**") && p.endsWith("**")) {
+      return (
+        <span key={j} className="font-semibold text-slate-900 dark:text-white">
+          {p.slice(2, -2)}
+        </span>
+      );
+    }
+    if (/^https?:\/\//.test(p)) {
+      const display = p.replace(/^https?:\/\//, "").slice(0, 30);
+      return (
+        <a
+          key={j}
+          href={p}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#fea116]/10 text-[#fea116] rounded-full text-xs font-medium hover:bg-[#fea116]/20 transition-colors"
+        >
+          {display}
+          <ExternalLink className="w-3 h-3" />
+        </a>
+      );
+    }
+    return <span key={j}>{p}</span>;
+  });
+}
+
+// ── Enhanced text formatting ────────────────────────────────────────────────
+
 function FormatText({ text }: { text: string }) {
-  // Split by lines, handle **bold** and bullet points
   const lines = text.split("\n");
 
   return (
     <>
       {lines.map((line, i) => {
-        // Bold text: **text**
-        const parts = line.split(/(\*\*[^*]+\*\*)/g);
-        const rendered = parts.map((p, j) => {
-          if (p.startsWith("**") && p.endsWith("**")) {
-            return (
-              <span key={j} className="font-semibold text-[#0f172b] dark:text-white">
-                {p.slice(2, -2)}
-              </span>
-            );
-          }
-          return <span key={j}>{p}</span>;
-        });
+        const trimmed = line.trimStart();
+
+        if (/^[-*]\s/.test(trimmed)) {
+          const content = trimmed.replace(/^[-*]\s/, "");
+          return (
+            <div key={i} className="flex gap-1.5 ml-1 my-0.5">
+              <span className="text-[#fea116] mt-0.5">-</span>
+              <span>{parseSegments(content)}</span>
+            </div>
+          );
+        }
+
+        const numMatch = trimmed.match(/^(\d+)\.\s(.*)/);
+        if (numMatch) {
+          return (
+            <div key={i} className="flex gap-1.5 ml-1 my-0.5">
+              <span className="text-[#fea116] font-semibold min-w-[1rem]">{numMatch[1]}.</span>
+              <span>{parseSegments(numMatch[2])}</span>
+            </div>
+          );
+        }
 
         return (
           <span key={i}>
-            {rendered}
+            {parseSegments(line)}
             {i < lines.length - 1 && <br />}
           </span>
         );
@@ -92,21 +145,44 @@ function FormatText({ text }: { text: string }) {
   );
 }
 
+// ── Extract uploaded image parts from a user message ─────────────────────────
+
+function extractUserImages(message: UIMessage): string[] {
+  return message.parts
+    .filter((p): p is { type: "file"; mediaType: string; url: string } => p.type === "file")
+    .map((p) => p.url);
+}
+
 export default function MessageBubble({
   message,
   index,
-  onQuickAdd,
-  onViewDetails,
+  onAddToCart,
+  onCustomize,
+  userProfilePicture,
 }: MessageBubbleProps) {
   const text = getMessageText(message);
   const isUser = message.role === "user";
-  const displayText = isUser ? text : cleanMarkers(text);
   const menuItems = !isUser ? extractMenuItems(message) : [];
+  const userImages = isUser ? extractUserImages(message) : [];
 
-  // Don't render empty messages (but allow messages with only cards)
-  if (!displayText && menuItems.length === 0) return null;
+  const [isScrollable, setIsScrollable] = useState(false);
+  const carouselRef = useRef<HTMLDivElement>(null);
 
-  // Check if streaming (last text part has state === 'streaming')
+  useEffect(() => {
+    const checkScroll = () => {
+      if (carouselRef.current) {
+        const { scrollWidth, clientWidth } = carouselRef.current;
+        setIsScrollable(scrollWidth > clientWidth);
+      }
+    };
+
+    checkScroll();
+    window.addEventListener("resize", checkScroll);
+    return () => window.removeEventListener("resize", checkScroll);
+  }, [menuItems.length]);
+
+  if (!text && menuItems.length === 0 && userImages.length === 0) return null;
+
   const lastTextPart = [...message.parts]
     .reverse()
     .find((p) => p.type === "text");
@@ -125,54 +201,112 @@ export default function MessageBubble({
         damping: 30,
         delay: Math.min(index * 0.05, 0.15),
       }}
-      className={`flex ${isUser ? "justify-end" : "justify-start gap-2"}`}
+      className={`flex ${isUser ? "justify-end gap-2" : "justify-start gap-2"}`}
     >
-      {/* ── Bot Avatar ──────────────────────────────────────────────────────── */}
+      {/* Bot Avatar */}
       {!isUser && (
         <div className="flex-shrink-0 mt-1">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#fea116] to-[#e89000] flex items-center justify-center shadow-sm shadow-[#fea116]/20 ring-2 ring-[#fea116]/10">
-            <Bot className="w-3.5 h-3.5 text-[#0f172b]" />
-          </div>
+          <Image
+            src="/ai-avatar.png"
+            alt="FlavorJet AI"
+            width={28}
+            height={28}
+            className="w-7 h-7 rounded-full object-cover shadow-sm shadow-[#fea116]/20 ring-2 ring-[#fea116]/10"
+          />
         </div>
       )}
 
       <div className={`${isUser ? "max-w-[80%]" : "max-w-[85%]"} space-y-2`}>
-        {/* ── Text Bubble ─────────────────────────────────────────────────── */}
-        {displayText && (
+        {/* Uploaded Image(s) — shown above text for user messages */}
+        {userImages.length > 0 && (
+          <div className="flex gap-2 justify-end flex-wrap">
+            {userImages.map((url, i) => (
+              <div
+                key={i}
+                className="rounded-2xl rounded-br-md overflow-hidden border-2 border-[#fea116]/30 shadow-sm shadow-[#fea116]/10"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={url}
+                  alt="Uploaded"
+                  className="h-36 w-auto max-w-[220px] object-cover"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Text Bubble */}
+        {text && (
           <div
             className={`px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
               isUser
-                ? "bg-gradient-to-br from-[#fea116] to-[#e89000] text-[#0f172b] rounded-2xl rounded-br-md shadow-sm shadow-[#fea116]/20"
-                : "bg-white dark:bg-slate-800/80 text-[#0f172b] dark:text-slate-200 rounded-2xl rounded-tl-md border border-[#fea116]/10 dark:border-slate-700/30 shadow-sm"
+                ? "bg-gradient-to-br from-[#fea116] to-[#e89000] text-slate-900 rounded-2xl rounded-br-md shadow-sm shadow-[#fea116]/20"
+                : "bg-white dark:bg-slate-800/80 text-slate-900 dark:text-slate-200 rounded-2xl rounded-tl-md border border-[#fea116]/10 dark:border-slate-700/30 shadow-sm"
             }`}
           >
-            {isUser ? displayText : <FormatText text={displayText} />}
+            {isUser ? text : <FormatText text={text} />}
             {isStreaming && (
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-[#fea116] animate-pulse rounded-full align-text-bottom opacity-60" />
             )}
           </div>
         )}
 
-        {/* ── Menu Item Cards (horizontal scroll) ────────────────────────── */}
+        {/* Menu Item Cards */}
         {menuItems.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 }}
-            className="flex gap-2.5 overflow-x-auto pb-1.5 scrollbar-hide -mx-1 px-1"
-          >
-            {menuItems.slice(0, 8).map((item, i) => (
-              <MenuItemCard
-                key={item.id}
-                item={item}
-                index={i}
-                onQuickAdd={onQuickAdd}
-                onViewDetails={onViewDetails}
-              />
-            ))}
-          </motion.div>
+          <div className="relative">
+            <motion.div
+              ref={carouselRef}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className="flex gap-2.5 overflow-x-auto pb-1.5 scrollbar-hide -mx-1 px-1"
+            >
+              {menuItems.slice(0, 8).map((item, i) => (
+                <MenuItemCard
+                  key={item.id}
+                  item={item}
+                  index={i}
+                  onAddToCart={onAddToCart}
+                  onCustomize={onCustomize}
+                />
+              ))}
+            </motion.div>
+
+            {/* Scroll indicator */}
+            {isScrollable && (
+              <motion.div
+                animate={{ x: [0, 4, 0] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none"
+              >
+                <div className="flex items-center gap-1 pr-1">
+                  <ChevronRight className="w-4 h-4 text-[#fea116] opacity-70" />
+                </div>
+              </motion.div>
+            )}
+          </div>
         )}
       </div>
+
+      {/* User Avatar */}
+      {isUser && (
+        <div className="flex-shrink-0 mt-1">
+          {userProfilePicture ? (
+            <Image
+              src={userProfilePicture}
+              alt="You"
+              width={28}
+              height={28}
+              className="w-7 h-7 rounded-full object-cover border-2 border-[#fea116]/30"
+            />
+          ) : (
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center">
+              <User className="w-3.5 h-3.5 text-white" />
+            </div>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }

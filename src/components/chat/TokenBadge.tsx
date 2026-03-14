@@ -19,7 +19,7 @@ export default function TokenBadge({ usage, model }: TokenBadgeProps) {
     <div className="relative">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono text-slate-400 hover:text-[#fea116] bg-slate-900/50 rounded-full border border-slate-700/50 hover:border-[#fea116]/30 transition-colors"
+        className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono text-slate-600 dark:text-slate-400 hover:text-[#fea116] bg-slate-100 dark:bg-slate-900/50 rounded-full border border-slate-300 dark:border-slate-700/50 hover:border-[#fea116]/30 transition-colors"
       >
         <Zap className="w-3 h-3" />
         <span>{usage.totalTokens.toLocaleString()} tok</span>
@@ -32,7 +32,7 @@ export default function TokenBadge({ usage, model }: TokenBadgeProps) {
             initial={{ opacity: 0, y: -4, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.95 }}
-            className="absolute bottom-full right-0 mb-2 w-48 p-3 bg-[#0f172b] border border-slate-700 rounded-xl shadow-xl text-[10px] font-mono text-slate-300 space-y-1.5 z-50"
+            className="absolute  right-0 mb-2 w-48 p-3 bg-white dark:bg-[#0f172b] border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl text-[10px] font-mono text-slate-700 dark:text-slate-300 space-y-1.5 z-50"
           >
             <div className="flex justify-between">
               <span className="text-slate-500">Model</span>
@@ -40,20 +40,20 @@ export default function TokenBadge({ usage, model }: TokenBadgeProps) {
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Input</span>
-              <span>{usage.inputTokens.toLocaleString()}</span>
+              <span className="text-slate-800 dark:text-slate-300">{usage.inputTokens.toLocaleString()}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Output</span>
-              <span>{usage.outputTokens.toLocaleString()}</span>
+              <span className="text-slate-800 dark:text-slate-300">{usage.outputTokens.toLocaleString()}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Tool calls</span>
-              <span>{usage.toolCalls}</span>
+              <span className="text-slate-800 dark:text-slate-300">{usage.toolCalls}</span>
             </div>
-            <div className="h-px bg-slate-700" />
+            <div className="h-px bg-slate-200 dark:bg-slate-700" />
             <div className="flex justify-between font-semibold">
-              <span className="text-slate-400">Total</span>
-              <span className="text-white">{usage.totalTokens.toLocaleString()}</span>
+              <span className="text-slate-500">Total</span>
+              <span className="text-slate-900 dark:text-white">{usage.totalTokens.toLocaleString()}</span>
             </div>
           </motion.div>
         )}

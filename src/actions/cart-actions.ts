@@ -149,6 +149,17 @@ export async function addToCart(menuItemId: number, quantity: number = 1, modifi
   }
 }
 
+// ── Add to Cart by Slug (AI card quick-add) ──────────────────────────────────
+export async function addToCartBySlug(slug: string, quantity: number = 1, modifierIds: number[] = []) {
+  const item = db
+    .select({ id: menuItems.id })
+    .from(menuItems)
+    .where(eq(menuItems.slug, slug))
+    .get();
+  if (!item) return { error: "item_not_found" };
+  return addToCart(item.id, quantity, modifierIds);
+}
+
 // ── Quick Add (no modifiers) ─────────────────────────────────────────────────
 export async function quickAddToCart(menuItemId: number) {
   const userId = await requireUser();
@@ -212,6 +223,39 @@ export async function updateSpecialInstructions(cartItemId: number, instructions
     revalidatePath("/cart");
   } catch {
     // prevent hang
+  }
+}
+
+// ── Remove from Cart by Slug (AI assistant) ──────────────────────────────────
+export async function removeFromCartBySlug(slug: string) {
+  const userId = await requireUser();
+  if (!userId) return { error: "not_authenticated" };
+
+  try {
+    const item = db
+      .select({ id: menuItems.id })
+      .from(menuItems)
+      .where(eq(menuItems.slug, slug))
+      .get();
+    if (!item) return { error: "item_not_found" };
+
+    const userCartItems = db
+      .select({ id: cartItems.id })
+      .from(cartItems)
+      .where(and(eq(cartItems.userId, userId), eq(cartItems.menuItemId, item.id)))
+      .all();
+
+    if (userCartItems.length === 0) return { error: "item_not_in_cart" };
+
+    for (const ci of userCartItems) {
+      db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
+      db.delete(cartItems).where(eq(cartItems.id, ci.id)).run();
+    }
+
+    revalidatePath("/", "layout");
+    return { success: true };
+  } catch {
+    return { error: "Failed to remove item from cart" };
   }
 }
 
@@ -287,6 +331,77 @@ export async function placeOrder(deliveryAddress?: string, deliveryPhone?: strin
   } catch (e) {
     // redirect() throws a special NEXT_REDIRECT error — must re-throw it
     if (e && typeof e === "object" && "digest" in e) throw e;
+    return { error: "Failed to place order" };
+  }
+}
+
+// ── Place Order from AI (no redirect, returns orderId) ───────────────────────
+export async function placeOrderFromAI() {
+  const userId = await requireUser();
+  if (!userId) return { error: "Not authenticated" };
+
+  try {
+    const cart = await getCart();
+    if (cart.length === 0) return { error: "Cart is empty" };
+
+    // Get user's saved address
+    const userData = db.select({
+      street: users.street,
+      apartment: users.apartment,
+      city: users.city,
+      zipCode: users.zipCode,
+      phone: users.phone,
+    }).from(users).where(eq(users.id, userId)).get();
+
+    if (!userData?.street) return { error: "No saved delivery address" };
+
+    const deliveryAddress = `${userData.street}${userData.apartment ? `, ${userData.apartment}` : ""}, ${userData.city} ${userData.zipCode}`;
+    const deliveryPhone = userData.phone || null;
+
+    const subtotal = cart.reduce((sum, item) => sum + item.lineTotal, 0);
+    const total = subtotal;
+    const estimatedMinutes = 25 + Math.floor(Math.random() * 20);
+
+    const order = db.insert(orders).values({
+      userId,
+      status: "confirmed",
+      total,
+      deliveryAddress,
+      deliveryPhone,
+      tip: 0,
+      estimatedMinutes,
+    }).returning({ id: orders.id }).get();
+
+    for (const item of cart) {
+      const orderItem = db.insert(orderItems).values({
+        orderId: order.id,
+        menuItemId: item.menuItemId,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        itemName: item.itemName,
+        specialInstructions: item.specialInstructions || null,
+      }).returning({ id: orderItems.id }).get();
+
+      for (const mod of item.modifiers) {
+        db.insert(orderItemModifiers).values({
+          orderItemId: orderItem.id,
+          modifierId: mod.id,
+          modifierName: mod.name,
+          priceAdjustment: mod.priceAdjustment,
+        }).run();
+      }
+    }
+
+    // Clear cart
+    const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
+    for (const ci of userCartItems) {
+      db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
+    }
+    db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
+
+    revalidatePath("/", "layout");
+    return { orderId: order.id, estimatedMinutes };
+  } catch {
     return { error: "Failed to place order" };
   }
 }

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { menuItems, categories } from "@/db/schema";
 import { eq, asc } from "drizzle-orm";
 import PopularMenuTabs from "./PopularMenuTabs";
+import ShinyText from "@/components/reactbits/ShinyText";
 
 export default function PopularMenuSection() {
   // Get items for popular display - grab from different categories
@@ -26,12 +27,12 @@ export default function PopularMenuSection() {
   const dinner = allItems.slice(third * 2).slice(0, 12);
 
   return (
-    <section className="py-16 lg:py-20 bg-[#f8f9fa] dark:bg-[#0b1120]" id="popular">
+    <section className="py-20 lg:py-28" id="popular">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="text-center mb-8 sm:mb-12">
-          <p className="text-[#fea116] font-medium tracking-wider uppercase mb-2">
-            Food Menu
+          <p className="font-medium tracking-wider uppercase mb-2">
+            <ShinyText text="Food Menu" speed={4} className="text-sm" />
           </p>
           <h2 className="text-3xl sm:text-4xl font-bold text-[#0f172b] dark:text-white">
             Most Popular Items
