@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Zap, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { TokenUsage } from "./types";
@@ -12,11 +12,24 @@ interface TokenBadgeProps {
 
 export default function TokenBadge({ usage, model }: TokenBadgeProps) {
   const [expanded, setExpanded] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!expanded) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setExpanded(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [expanded]);
 
   if (usage.totalTokens === 0) return null;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono text-slate-600 dark:text-slate-400 hover:text-[#fea116] bg-slate-100 dark:bg-slate-900/50 rounded-full border border-slate-300 dark:border-slate-700/50 hover:border-[#fea116]/30 transition-colors"

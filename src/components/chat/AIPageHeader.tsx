@@ -67,7 +67,7 @@ export default function AIPageHeader({
       {/* Right: Controls */}
       <div className="flex items-center gap-1">
         {/* Token Badge */}
-        <TokenBadge usage={tokenUsage} model={modelName} />
+        {/* <TokenBadge usage={tokenUsage} model={modelName} /> */}
 
         {/* Memory chip */}
         {messageCount > 0 && (

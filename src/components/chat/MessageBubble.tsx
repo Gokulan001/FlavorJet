@@ -25,8 +25,8 @@ interface MessageBubbleProps {
 
 function extractMenuItems(message: UIMessage): MinimalMenuItem[] {
   const addedSlugs = new Set<string>();
+  const seenSlugs = new Set<string>();
   const items: MinimalMenuItem[] = [];
-  const seenIds = new Set<number>();
 
   // Pass 1: collect addedSlugs from successful add_to_cart results
   for (const part of message.parts) {
@@ -35,9 +35,7 @@ function extractMenuItems(message: UIMessage): MinimalMenuItem[] {
     if (toolPart.state !== "output-available" || !toolPart.output) continue;
     const result = toolPart.output as Record<string, unknown>;
     if (result.addedSlugs && Array.isArray(result.addedSlugs)) {
-      for (const slug of result.addedSlugs as string[]) {
-        addedSlugs.add(slug);
-      }
+      for (const slug of result.addedSlugs as string[]) addedSlugs.add(slug);
     }
   }
 
@@ -45,23 +43,16 @@ function extractMenuItems(message: UIMessage): MinimalMenuItem[] {
   for (const part of message.parts) {
     if (!part.type.startsWith("tool-") || part.type === "tool-add_to_cart") continue;
 
-    // AI SDK v6: ToolUIPart has type "tool-{name}", state "output-available", output at top level
-    const toolPart = part as unknown as {
-      type: string;
-      state: string;
-      output?: unknown;
-    };
-
+    const toolPart = part as unknown as { type: string; state: string; output?: unknown };
     if (toolPart.state !== "output-available" || !toolPart.output) continue;
     const result = toolPart.output as Record<string, unknown>;
 
     if (result.items && Array.isArray(result.items)) {
       for (const item of result.items) {
-        if (item && typeof item === "object" && "id" in item && "slug" in item) {
-          const id = (item as { id: number }).id;
+        if (item && typeof item === "object" && "slug" in item && "name" in item) {
           const slug = (item as { slug: string }).slug;
-          if (!seenIds.has(id) && !addedSlugs.has(slug)) {
-            seenIds.add(id);
+          if (!seenSlugs.has(slug) && !addedSlugs.has(slug)) {
+            seenSlugs.add(slug);
             items.push(item as MinimalMenuItem);
           }
         }
@@ -237,7 +228,7 @@ export default function MessageBubble({
         )}
 
         {/* Text Bubble */}
-        {text && (
+        {(text || (menuItems.length > 0 && !isUser)) && (
           <div
             className={`px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
               isUser
@@ -245,7 +236,7 @@ export default function MessageBubble({
                 : "bg-white dark:bg-slate-800/80 text-slate-900 dark:text-slate-200 rounded-2xl rounded-tl-md border border-[#fea116]/10 dark:border-slate-700/30 shadow-sm"
             }`}
           >
-            {isUser ? text : <FormatText text={text} />}
+            {isUser ? text : <FormatText text={text || "Check out these options:"} />}
             {isStreaming && (
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-[#fea116] animate-pulse rounded-full align-text-bottom opacity-60" />
             )}
@@ -264,7 +255,7 @@ export default function MessageBubble({
             >
               {menuItems.slice(0, 8).map((item, i) => (
                 <MenuItemCard
-                  key={item.id}
+                  key={item.slug}
                   item={item}
                   index={i}
                   onAddToCart={onAddToCart}

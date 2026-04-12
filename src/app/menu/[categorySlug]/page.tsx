@@ -9,6 +9,9 @@ import { formatPrice } from "@/lib/utils";
 import QuickAddButton from "@/components/menu/QuickAddButton";
 import SearchBar from "@/components/menu/SearchBar";
 
+// ISR: regenerate every 10 minutes — menu data is static
+export const revalidate = 600;
+
 interface Props {
   params: Promise<{ categorySlug: string }>;
 }

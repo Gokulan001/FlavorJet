@@ -47,7 +47,7 @@ export default function ChatMessages({
     <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3 scrollbar-hide">
       {messages.map((msg, i) => (
         <MessageBubble
-          key={msg.id}
+          key={`${msg.id}-${i}`}
           message={msg}
           index={i}
           onAddToCart={onAddToCart}

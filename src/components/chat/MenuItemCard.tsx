@@ -1,9 +1,11 @@
 "use client";
 
+import React from "react";
 import { motion } from "framer-motion";
 import { Star, ShoppingCart, Settings2 } from "lucide-react";
 import Image from "next/image";
 import type { MinimalMenuItem } from "./types";
+import { useMenuImages } from "./MenuImagesContext";
 
 interface MenuItemCardProps {
   item: MinimalMenuItem;
@@ -34,6 +36,10 @@ function DietaryBadges({ item }: { item: MinimalMenuItem }) {
 }
 
 export default function MenuItemCard({ item, index, onAddToCart, onCustomize }: MenuItemCardProps) {
+  const imageMap = useMenuImages();
+  const imageUrl = item.imageUrl ?? imageMap.get(item.slug);
+  const [imageError, setImageError] = React.useState(false);
+
   const handleCardClick = () => {
     if (item.hasModifiers) {
       onCustomize?.(item.slug);
@@ -52,13 +58,15 @@ export default function MenuItemCard({ item, index, onAddToCart, onCustomize }: 
     >
       {/* Image */}
       <div className="relative h-[90px] bg-gradient-to-br from-[#fea116]/10 to-[#fea116]/5 overflow-hidden">
-        {item.imageUrl ? (
+        {imageUrl && !imageError ? (
           <Image
-            src={item.imageUrl}
+            src={imageUrl}
             alt={item.name}
             fill
             className="object-cover group-hover:scale-105 transition-transform duration-300"
             sizes="155px"
+            onError={() => setImageError(true)}
+            unoptimized
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-3xl">

@@ -1,18 +1,28 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { uploadImage } from "@/lib/cloudinary";
 import { hashPassword, verifyPassword } from "@/lib/hash";
 import { createAuthSession, destroySession, verifyAuthAndRefresh } from "@/lib/auth";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { rateLimit } from "@/lib/security/rateLimit";
 
 export type AuthFormState = {
   errors?: Record<string, string>;
 };
 
 export async function signup(prevState: AuthFormState, formData: FormData): Promise<AuthFormState & { redirectTo?: string }> {
+  // Rate limit: 3 signups per minute per IP
+  const headersList = await headers();
+  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const { allowed } = rateLimit(`signup:${ip}`, { limit: 3, windowMs: 60_000 });
+  if (!allowed) {
+    return { errors: { email: "Too many signup attempts. Please wait a minute." } };
+  }
+
   const errors: Record<string, string> = {};
 
   const username = formData.get("username") as string;
@@ -58,6 +68,14 @@ export async function signup(prevState: AuthFormState, formData: FormData): Prom
 }
 
 export async function login(prevState: AuthFormState, formData: FormData): Promise<AuthFormState> {
+  // Rate limit: 5 attempts per minute per IP
+  const headersList = await headers();
+  const ip = headersList.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  const { allowed } = rateLimit(`login:${ip}`, { limit: 5, windowMs: 60_000 });
+  if (!allowed) {
+    return { errors: { credentials: "Too many login attempts. Please wait a minute." } };
+  }
+
   const username = formData.get("username") as string;
   const password = formData.get("password") as string;
 

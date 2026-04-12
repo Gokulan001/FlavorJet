@@ -1,10 +1,42 @@
 import { streamText, convertToModelMessages, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import type { UIMessage } from "ai";
+import { z } from "zod";
 import { getModel } from "@/lib/ai/providers";
 import { buildSystemPrompt, type Language, type WeatherData } from "@/lib/ai/system-prompt";
 import { createRAGTools } from "@/lib/rag/tools";
 import { detectIntent, getToolsForIntent } from "@/lib/ai/intent-router";
+import { semanticCache, SemanticInputCache } from "@/lib/cache/semanticInputCache";
+import { rateLimit } from "@/lib/security/rateLimit";
 import type { CartContext, PendingQueue } from "@/components/chat/types";
+
+// ── Request Validation Schema ───────────────────────────────────────────────
+
+const ChatRequestSchema = z.object({
+  messages: z.array(z.object({
+    id: z.string(),
+    role: z.enum(["user", "assistant", "system"]),
+    parts: z.array(z.any()),
+  })).min(1, "At least one message required"),
+  language: z.string().optional(),
+  weather: z.object({
+    temp: z.number(),
+    feels_like: z.number().optional(),
+    description: z.string(),
+    humidity: z.number().optional(),
+    icon: z.string().optional(),
+  }).nullable().optional(),
+  cartContext: z.object({
+    items: z.array(z.object({
+      name: z.string(),
+      qty: z.number(),
+      price: z.string(),
+      slug: z.string().optional(),
+    })),
+    total: z.string(),
+  }).nullable().optional(),
+  pendingQueue: z.any().nullable().optional(),
+  isVoiceMode: z.boolean().optional(),
+});
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -126,10 +158,11 @@ function stripOldImageParts(messages: UIMessage[]): UIMessage[] {
 }
 
 // ── Message History Compression ──────────────────────────────────────────────
+// keepLast=3: compress older history faster → saves ~560 tokens/turn after 3 turns
 
 function optimizeUIHistory(
   messages: UIMessage[],
-  keepLast: number = 5
+  keepLast: number = 3
 ): UIMessage[] {
   // Strip tool output image URLs + old uploaded image parts
   const stripped = stripOldImageParts(stripImagesFromToolOutputs(messages));
@@ -156,12 +189,73 @@ function optimizeUIHistory(
   return [summaryMessage, ...recent];
 }
 
+// ── Diagnostic helpers ───────────────────────────────────────────────────────
+
+// JSON/structured data tokenizes at ~2.5 chars/token (not 4) — keys, quotes, braces each count
+function estTokens(text: string): number {
+  return Math.ceil(text.length / 2.5);
+}
+
+/** Serialize tools to readable log (name + description + param names, no execute fn) */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function serializeTools(tools: Record<string, any>) {
+  return Object.entries(tools).map(([name, t]) => ({
+    name,
+    description: t.description as string,
+    params: t.inputSchema?.shape ? Object.keys(t.inputSchema.shape) : [],
+  }));
+}
+
+/** Summarize message history for logging */
+function summarizeMessages(msgs: UIMessage[]) {
+  return msgs.map((m) => {
+    const text = getUIMessageText(m).slice(0, 80);
+    const hasTool = m.parts.some((p) => p.type.startsWith("tool-"));
+    const hasFile = m.parts.some((p) => p.type === "file");
+    return `  [${m.role}] ${text}${hasTool ? " +tool" : ""}${hasFile ? " +img" : ""}`;
+  });
+}
+
+// ── Response Cache ────────────────────────────────────────────────────────────
+// Exact-match cache for identical browse queries — skips Gemini entirely on hit.
+// Only caches stateless intents (no cart, no image, no voice) on fresh sessions.
+// Uses body.tee() to capture the live stream bytes and replay them on cache hit.
+
+const RESPONSE_CACHE_INTENTS = new Set([
+  "food_search", "category_browse", "popular_browse", "dietary_search", "info",
+]);
+const RESP_CACHE_TTL = 5 * 60 * 1000; // 5 min — menu data stable within session
+const RESP_CACHE_MAX = 50;             // FIFO eviction
+
+// ── Semantic Cache Intent Filter ───────────────────────────────────────────
+// Only cache stateless/global intents. Skip user-specific queries (cart, reorder, image).
+const SEMANTIC_CACHE_INTENTS = new Set([
+  "food_search", "category_browse", "popular_browse", "dietary_search", "info",
+]);
+
+interface ResponseCacheEntry {
+  chunks: Uint8Array[];
+  ts: number;
+}
+const responseCache = new Map<string, ResponseCacheEntry>();
+
 // ── API Route ────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const { messages, language, weather, cartContext, pendingQueue, isVoiceMode } = body as {
+    const raw = await req.json();
+
+    // Validate request shape — reject malformed payloads early
+    const parseResult = ChatRequestSchema.safeParse(raw);
+    if (!parseResult.success) {
+      console.warn("[Chat API] Invalid request:", parseResult.error.issues);
+      return new Response(
+        JSON.stringify({ error: "Invalid request", details: parseResult.error.issues }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    const { messages, language, weather, cartContext, pendingQueue, isVoiceMode } = raw as {
       messages: UIMessage[];
       language?: Language;
       weather?: WeatherData | null;
@@ -170,23 +264,165 @@ export async function POST(req: Request) {
       isVoiceMode?: boolean;
     };
 
-    // Detect intent from last user message
+    // ── Rate Limiting ─────────────────────────────────────────────────────────
+    // 30 text requests / min / IP — 10 image requests / min / IP
+    const clientIp =
+      req.headers.get("x-forwarded-for")?.split(",")[0].trim()
+      ?? req.headers.get("x-real-ip")
+      ?? "unknown";
+
     const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
     const lastText = lastUserMsg ? getUIMessageText(lastUserMsg) : "";
     const hasImage = lastUserMsg?.parts.some((p) => p.type === "file") ?? false;
+
+    const rlKey = `chat:${clientIp}`;
+    const rlLimit = hasImage ? 10 : 30;
+    const { allowed } = rateLimit(rlKey, { limit: rlLimit, windowMs: 60_000 });
+    if (!allowed) {
+      console.warn(`[Chat API] Rate limit hit for ${clientIp}`);
+      return new Response(
+        JSON.stringify({ error: "Too many requests. Please slow down." }),
+        { status: 429, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── Non-food / Off-topic Text Guard ───────────────────────────────────────
+    // Catches obvious off-topic abuse (code injection, jailbreaks, unrelated topics).
+    // The system prompt + Gemini safety settings handle subtler cases.
+    const OFF_TOPIC_RE = /\b(ignore (previous|all|prior)|you are now|act as|pretend you|forget your|system prompt|DAN|jailbreak|base64|eval\(|DROP TABLE|rm -rf|sudo |chmod |hack|exploit|malware|ransomware|phishing)\b/i;
+    if (OFF_TOPIC_RE.test(lastText) && !hasImage) {
+      console.warn(`[Chat API] Off-topic/injection attempt blocked: "${lastText.slice(0, 80)}"`);
+      // Stream a polite rejection as a normal assistant message (no error toast, no blank screen)
+      const rejectionStream = createUIMessageStream({
+        execute: async ({ writer }) => {
+          writer.write({ type: "text-start", id: "rejection" });
+          writer.write({ type: "text-delta", id: "rejection", delta: "I'm here to help with food orders only! Ask me about our menu, recommendations, or your cart. 🍽️" });
+          writer.write({ type: "text-end", id: "rejection" });
+        },
+      });
+      return createUIMessageStreamResponse({ stream: rejectionStream });
+    }
+
+    // ── Image Safety Pre-check ─────────────────────────────────────────────────
+    // Gemini safety settings block NSFW content at model level.
+    // Additional guard: reject non-base64 / suspicious file payloads early.
+    if (hasImage) {
+      const imgPart = lastUserMsg?.parts.find((p) => p.type === "file") as
+        | { type: "file"; mediaType: string; url: string }
+        | undefined;
+
+      if (imgPart) {
+        // Only accept image/* MIME types
+        if (!imgPart.mediaType?.startsWith("image/")) {
+          console.warn(`[Chat API] Non-image file rejected: ${imgPart.mediaType}`);
+          return new Response(
+            JSON.stringify({ error: "Only image files are supported." }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        // Sanity check on URL — must be data URL (base64) or https URL
+        if (!imgPart.url?.startsWith("data:") && !imgPart.url?.startsWith("https://")) {
+          console.warn(`[Chat API] Suspicious image URL scheme rejected`);
+          return new Response(
+            JSON.stringify({ error: "Invalid image format." }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+      }
+    }
+
+    // Detect intent from last user message (lastUserMsg, lastText, hasImage already declared above)
     const intent = detectIntent(lastText, hasImage);
+
+    // ── Early history computation (needed for cache key + pristine check) ────
+    const filtered = messages.filter((m) => m.id !== "welcome");
+    const optimizedMessages = optimizeUIHistory(filtered);
+
+    // ── Response cache check ──────────────────────────────────────────────────
+    // Only cache: non-image, non-voice, stateless browse intents, FRESH sessions.
+    // "Fresh session" = only the current message exists (no prior conversation).
+    // Different users asking the same first question share the cache (menu is global).
+    const isPristineSession = filtered.length === 1; // only the current user message
+    const canCache = !hasImage && !isVoiceMode && isPristineSession && RESPONSE_CACHE_INTENTS.has(intent);
+    const normalizedMsg = lastText.toLowerCase().trim().replace(/\s+/g, " ");
+    const cacheKey = `${normalizedMsg}:${intent}:${language || "en"}`;
+
+    if (canCache) {
+      const hit = responseCache.get(cacheKey);
+      if (hit && Date.now() - hit.ts < RESP_CACHE_TTL) {
+        console.log(`[Chat] ⚡ RESPONSE CACHE HIT → "${cacheKey.slice(0, 60)}" (0 Gemini tokens)`);
+        const stream = new ReadableStream({
+          start(controller) {
+            for (const chunk of hit.chunks) controller.enqueue(chunk);
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "x-vercel-ai-data-stream": "v1",
+            "X-Cache-Status": "HIT",
+          },
+        });
+      }
+    }
+
+    // ── Semantic Input Cache Check ───────────────────────────────────────────
+    // Prevents duplicate Gemini calls for identical stateless queries within session TTL.
+    // Only caches: food_search, category_browse, popular_browse, dietary_search, info.
+    // Skips user-specific: cart_action, reorder, direct_order, image.
+    const canSemanticCache = SEMANTIC_CACHE_INTENTS.has(intent);
+    const normalizedQuery = lastText.toLowerCase().trim().replace(/\s+/g, " ");
+    const semanticCacheKey = SemanticInputCache.generateKey(normalizedQuery, "global");
+    const semanticCacheHit = canSemanticCache ? semanticCache.get(semanticCacheKey) : null;
+    console.log(`[Cache] intent=${intent} cacheable=${canSemanticCache} hit=${!!semanticCacheHit}`);
+
+    if (semanticCacheHit) {
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of semanticCacheHit.cachedChunks) {
+            controller.enqueue(chunk);
+          }
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "x-vercel-ai-data-stream": "v1",
+          "X-Cache-Status": "SEMANTIC-HIT",
+        },
+      });
+    }
+
+    // ── Normal flow ──────────────────────────────────────────────────────────
 
     // Get only relevant tools for this intent
     const allTools = createRAGTools();
     const tools = getToolsForIntent(intent, allTools);
 
-    const toolCount = Object.keys(tools).length;
-    console.log(`[Chat] intent:${intent} hasImage:${hasImage} tools:${toolCount} msgs:${messages.length}`);
-
-    const systemPrompt = await buildSystemPrompt(language || "en", weather, cartContext, pendingQueue, undefined, hasImage, isVoiceMode);
-    const filtered = messages.filter((m) => m.id !== "welcome");
-    const optimizedMessages = optimizeUIHistory(filtered);
+    const systemPrompt = await buildSystemPrompt(language || "en", weather, cartContext, pendingQueue, undefined, hasImage, isVoiceMode, intent);
     const modelMessages = await convertToModelMessages(optimizedMessages);
+
+    // ── Diagnostic log ───────────────────────────────────────────────────────
+    const toolList = serializeTools(tools);
+    const sysPTokens = estTokens(systemPrompt);
+    const msgTokens = estTokens(JSON.stringify(modelMessages));
+    const toolSchemaTokens = estTokens(JSON.stringify(toolList));
+
+    console.log("════════════════════════════════════════════");
+    console.log(`[Chat] intent:${intent} | voice:${!!isVoiceMode} | hasImage:${hasImage} | cache:${canCache ? "eligible" : "skip"}`);
+    console.log(`[Msgs] raw:${messages.length} → optimized:${optimizedMessages.length}`);
+    summarizeMessages(optimizedMessages).forEach((l) => console.log(l));
+    console.log(`[SystemPrompt] ~${sysPTokens} tokens (${systemPrompt.length} chars)`);
+    console.log(`  └─ ${systemPrompt.slice(0, 200).replace(/\n/g, " | ")}…`);
+    console.log(`[Tools→Gemini] count:${toolList.length} | ~${toolSchemaTokens} tokens`);
+    toolList.forEach((t) =>
+      console.log(`  ├─ ${t.name}: "${t.description}" | params:[${t.params.join(", ")}]`)
+    );
+    console.log(`[History] ~${msgTokens} tokens`);
+    console.log(`[Est.Input] sys:${sysPTokens} + msgs:${msgTokens} + tools:${toolSchemaTokens} = ~${sysPTokens + msgTokens + toolSchemaTokens} tokens (×2 steps)`);
+    console.log("════════════════════════════════════════════");
 
     let inputTokens = 0, outputTokens = 0, toolCallCount = 0;
 
@@ -196,8 +432,21 @@ export async function POST(req: Request) {
       messages: modelMessages,
       maxOutputTokens: isVoiceMode ? 200 : 512,
       temperature: 0.7,
-      stopWhen: stepCountIs(5),
+      stopWhen: stepCountIs(3),
       tools,
+      // ── Gemini-level safety: block NSFW at model layer (no extra API key needed) ──
+      // BLOCK_LOW_AND_ABOVE = strictest — blocks anything detected at low confidence or above.
+      // This prevents explicit content from reaching users even in image analysis mode.
+      providerOptions: {
+        google: {
+          safetySettings: [
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_LOW_AND_ABOVE" },
+            { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_LOW_AND_ABOVE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+          ],
+        },
+      },
       onStepFinish({ usage, toolCalls }) {
         inputTokens += usage?.inputTokens ?? 0;
         outputTokens += usage?.outputTokens ?? 0;
@@ -209,6 +458,8 @@ export async function POST(req: Request) {
       execute: async ({ writer }) => {
         writer.merge(result.toUIMessageStream());
         await result.usage;
+        console.log(`[Tokens] ACTUAL → input:${inputTokens} output:${outputTokens} total:${inputTokens + outputTokens} | est.input was:~${sysPTokens + msgTokens + toolSchemaTokens} | toolCalls:${toolCallCount}`);
+        console.log(`[UIBadge] will show → input:${inputTokens} output:${outputTokens} total:${inputTokens + outputTokens}`);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (writer as any).write({
           type: "data-token-usage",
@@ -216,10 +467,64 @@ export async function POST(req: Request) {
           data: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, toolCalls: toolCallCount },
         });
       },
-      onError: () => "An error occurred",
+      onError: (error) => {
+        console.error("[Chat stream] Error:", error);
+        return "Sorry, something went wrong. Please try again.";
+      },
     });
 
-    return createUIMessageStreamResponse({ stream });
+    const streamResponse = createUIMessageStreamResponse({ stream });
+
+    // ── Cache capture via body.tee() ──────────────────────────────────────────
+    // Single tee captures chunks for both response cache + semantic cache.
+    // Client gets their stream immediately; caches fill in background.
+    const needsCapture = (canCache || true) && streamResponse.body;
+    if (needsCapture && streamResponse.body) {
+      const [forClient, forCapture] = streamResponse.body.tee();
+
+      (async () => {
+        const reader = forCapture.getReader();
+        const chunks: Uint8Array[] = [];
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) chunks.push(value);
+          }
+
+          if (chunks.length > 0) {
+            // Response cache (pristine browse sessions)
+            if (canCache) {
+              if (responseCache.size >= RESP_CACHE_MAX) {
+                const firstKey = responseCache.keys().next().value;
+                if (firstKey) responseCache.delete(firstKey);
+              }
+              responseCache.set(cacheKey, { chunks, ts: Date.now() });
+              console.log(`[Chat] ✅ RESP CACHED → "${cacheKey.slice(0, 60)}" (${chunks.length} chunks)`);
+            }
+
+            // Semantic input cache (dedup identical stateless queries)
+            if (canSemanticCache) {
+              semanticCache.set(semanticCacheKey, {
+                cachedChunks: chunks,
+                tokenUsage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+                cachedAt: Date.now(),
+              });
+              console.log(`[Cache] Stored: key=${semanticCacheKey.slice(0,12)}... tokens=${inputTokens + outputTokens}`);
+            }
+          }
+        } catch {
+          // Fail silently — cache miss on next request is fine
+        }
+      })();
+
+      return new Response(forClient, {
+        status: streamResponse.status,
+        headers: streamResponse.headers,
+      });
+    }
+
+    return streamResponse;
   } catch (error) {
     console.error("[Chat API] Error:", error);
     return new Response(

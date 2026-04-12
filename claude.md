@@ -104,3 +104,64 @@ If user has no clear idea:
 - Let them refine the idea before confirming
 
 Only execute after user confirms. Never assume intent or behavior.
+
+Always use Context7 (find-docs skill) when answering technical questions
+or writing code that uses any external library, framework, or API —
+without me having to explicitly ask.
+
+Role-Based Expert Approach
+
+When the user asks a question or requests analysis, ALWAYS assign yourself the most relevant expert role before responding. Name the role explicitly. Examples:
+- System design / architecture / caching → **Principal Architect + Distributed Systems Engineer**
+- AI token optimization / LLM architecture → **ML Infrastructure Engineer + LLM Systems Architect**
+- Cost reduction / scalability → **Staff Infrastructure Engineer + FinOps Specialist**
+- Bug investigation → **Senior Staff Engineer (Debugging Specialist)**
+- UI/UX architecture → **Staff Frontend Architect**
+- Security / auth → **Principal Security Engineer**
+- Database design → **Principal Database Architect**
+The role must be expert-level and named. Never use a generic "assistant" role.
+Adopt that mindset fully when answering — depth, rigor, trade-offs, production awareness.
+
+After any corrections from me, add this entry to TASKS/LESSONS.MD. FORMAT: DATE, WHAT WENT WRONG, RULE FOR NEXT TIME.
+Read tasks/lessons.md at the start if every session. Apply this rules before touching any code.
+
+CRITICAL SAFETY RULES
+
+DO NOT EVER DELETE ANY FILES WITHOUT MY EXPLICIT CONFIRMATION — whether via git commands (clean, checkout, reset, stash drop), restructuring, refactoring, or any other method. ALWAYS ask first.
+
+ALWAYS EXPLAIN IN CHAT TEXT WHAT YOU ARE ABOUT TO DO BEFORE SHOWING OR RUNNING ANY COMMANDS. Wait for user approval before executing. Never run destructive or state-changing commands silently.
+
+## RULES
+ALWAYS before making any change, Search on the web for the newest documentation. And only implement if you are 100% sure it will work.
+
+## code-review-graph
+
+**Repo:** [code-review-graph](https://github.com/tirth8205/code-review-graph)
+
+**CRITICAL:** Use graph tools FIRST before Grep/Glob/Read — faster, cheaper tokens, structural context (callers, tests, dependencies) that file scanning can't give.
+
+### MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `detect_changes` | Risk-score code diffs, impact analysis |
+| `get_review_context` | Source snippets for review (token-efficient) |
+| `get_impact_radius` | Blast radius of a change |
+| `get_affected_flows` | Which execution paths are impacted |
+| `query_graph` | Find callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes` | Find functions/classes by name/keyword |
+| `get_architecture_overview` | High-level codebase structure |
+| `refactor_tool` | Plan renames, find dead code |
+| `build_or_update_graph_tool` | Build/update knowledge graph |
+| `list_communities_tool` | Find code communities (clusters) |
+| `list_flows_tool` | List execution flows by criticality |
+| `get_minimal_context_tool` | Ultra-compact context (~100 tokens) |
+| `embed_graph_tool` | Enable semantic search via embeddings |
+| `semantic_search_nodes_tool` | Semantic search (if embeddings enabled) |
+
+**Use case mapping:**
+- Exploring → `semantic_search_nodes` instead of Grep
+- Impact analysis → `get_impact_radius` instead of manual tracing
+- Code review → `detect_changes` + `get_review_context` instead of reading files
+- Find relationships → `query_graph` with pattern (callers_of/callees_of/imports_of/tests_for)
+- Architecture → `get_architecture_overview` + `list_communities`

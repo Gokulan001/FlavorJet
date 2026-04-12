@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Loader2, ShoppingCart } from "lucide-react";
+import { Mic, MicOff, Square, ShoppingCart } from "lucide-react";
 import SineWave from "./SineWave";
 import type { VoiceState } from "./types";
 
@@ -37,10 +37,12 @@ function HighlightedText({
   text,
   audioRef,
   isSpeaking,
+  isDark,
 }: {
   text: string;
   audioRef?: React.RefObject<HTMLAudioElement | null>;
   isSpeaking: boolean;
+  isDark: boolean;
 }) {
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
   const words = text.split(/(\s+)/);
@@ -91,10 +93,10 @@ function HighlightedText({
             key={i}
             className={`transition-colors duration-150 ${
               isRead
-                ? "text-white/90"
+                ? isDark ? "text-white/90" : "text-slate-900/90"
                 : isCurrent && isSpeaking
-                ? "text-[#fea116]"
-                : "text-white/35"
+                ? isDark ? "text-[#fea116]" : "text-amber-600"
+                : isDark ? "text-white/35" : "text-slate-500/35"
             }`}
           >
             {token}
@@ -175,6 +177,7 @@ export default function VoicePanel({
                   text={lastResponse}
                   audioRef={audioRef}
                   isSpeaking={isSpeaking}
+                  isDark={isDark}
                 />
               </motion.div>
             )}
@@ -225,12 +228,11 @@ export default function VoicePanel({
             whileHover={{ scale: 1.06 }}
             whileTap={{ scale: 0.94 }}
             onClick={onMicToggle}
-            disabled={voiceState === "processing" || voiceState === "speaking"}
-            className={`relative w-18 h-18 w-[72px] h-[72px] rounded-full flex items-center justify-center transition-all ${
+            className={`relative w-[72px] h-[72px] rounded-full flex items-center justify-center transition-all ${
               voiceState === "listening"
                 ? "bg-red-500 text-white shadow-2xl shadow-red-500/40"
                 : voiceState === "processing" || voiceState === "speaking"
-                ? "bg-white/8 text-white/30 cursor-not-allowed border border-white/10"
+                ? isDark ? "bg-white/10 text-red-400 border-2 border-transparent" : "bg-slate-100 text-red-500 border-2 border-transparent"
                 : "bg-gradient-to-br from-[#fea116] to-[#d97706] text-slate-900 shadow-2xl shadow-[#fea116]/35"
             }`}
           >
@@ -241,13 +243,17 @@ export default function VoicePanel({
                 <span className="absolute -inset-3 rounded-full border border-red-400/20 animate-ping" style={{ animationDelay: "0.15s" }} />
               </>
             )}
+            {/* Processing/speaking: spinning ring */}
+            {(voiceState === "processing" || voiceState === "speaking") && (
+              <span className="absolute inset-0 rounded-full border-2 border-transparent border-t-red-400 border-r-red-400/40 animate-spin" />
+            )}
             {/* Idle glow ring */}
             {voiceState === "idle" && (
               <span className="absolute -inset-1.5 rounded-full bg-[#fea116]/15 blur-sm" />
             )}
 
-            {voiceState === "processing" ? (
-              <Loader2 className="w-7 h-7 animate-spin" />
+            {voiceState === "processing" || voiceState === "speaking" ? (
+              <Square className="w-5 h-5 fill-current" />
             ) : voiceState === "listening" ? (
               <MicOff className="w-7 h-7" />
             ) : (

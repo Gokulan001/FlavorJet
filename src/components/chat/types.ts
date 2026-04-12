@@ -172,11 +172,10 @@ export interface FullCartItem {
 
 // ── Minimal Menu Item (what AI tool results return) ────────────────────────
 export interface MinimalMenuItem {
-  id: number;
   name: string;
   price: string;
   slug: string;
-  imageUrl: string;
+  imageUrl?: string; // optional — resolved client-side via MenuImagesContext
   rating: string;
   hasModifiers: boolean;
   vegan: boolean;

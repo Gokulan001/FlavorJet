@@ -9,6 +9,7 @@ import {
   orders, orderItems, orderItemModifiers, users, categories,
 } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
+import { withTransaction } from "@/lib/db/transaction";
 
 // ── Helper: single auth check per action (uses cookie-refreshing version) ────
 async function requireUser() {
@@ -120,27 +121,30 @@ export async function addToCart(menuItemId: number, quantity: number = 1, modifi
       return itemMods.every((id, i) => id === sortedMods[i]);
     });
 
-    if (match) {
-      // Same item + same modifiers → just bump quantity
-      db.update(cartItems)
-        .set({ quantity: match.quantity + quantity })
-        .where(eq(cartItems.id, match.id))
-        .run();
-    } else {
-      // Different modifiers → new cart item
-      const cartItem = db.insert(cartItems).values({
-        userId,
-        menuItemId,
-        quantity,
-      }).returning({ id: cartItems.id }).get();
+    // Atomic: insert cart item + modifiers in one transaction
+    withTransaction(() => {
+      if (match) {
+        // Same item + same modifiers → just bump quantity
+        db.update(cartItems)
+          .set({ quantity: match.quantity + quantity })
+          .where(eq(cartItems.id, match.id))
+          .run();
+      } else {
+        // Different modifiers → new cart item
+        const cartItem = db.insert(cartItems).values({
+          userId,
+          menuItemId,
+          quantity,
+        }).returning({ id: cartItems.id }).get();
 
-      for (const modId of modifierIds) {
-        db.insert(cartItemModifiers).values({
-          cartItemId: cartItem.id,
-          modifierId: modId,
-        }).run();
+        for (const modId of modifierIds) {
+          db.insert(cartItemModifiers).values({
+            cartItemId: cartItem.id,
+            modifierId: modId,
+          }).run();
+        }
       }
-    }
+    });
 
     revalidatePath("/", "layout");
     return { success: true };
@@ -289,45 +293,50 @@ export async function placeOrder(deliveryAddress?: string, deliveryPhone?: strin
 
     const estimatedMinutes = 25 + Math.floor(Math.random() * 20);
 
-    const order = db.insert(orders).values({
-      userId,
-      status: "confirmed",
-      total,
-      deliveryAddress: deliveryAddress || null,
-      deliveryPhone: deliveryPhone || null,
-      tip: tipAmount,
-      estimatedMinutes,
-    }).returning({ id: orders.id }).get();
+    // Atomic: create order + items + modifiers + clear cart in one transaction
+    const orderId = withTransaction(() => {
+      const order = db.insert(orders).values({
+        userId,
+        status: "confirmed",
+        total,
+        deliveryAddress: deliveryAddress || null,
+        deliveryPhone: deliveryPhone || null,
+        tip: tipAmount,
+        estimatedMinutes,
+      }).returning({ id: orders.id }).get();
 
-    for (const item of cart) {
-      const orderItem = db.insert(orderItems).values({
-        orderId: order.id,
-        menuItemId: item.menuItemId,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        itemName: item.itemName,
-        specialInstructions: item.specialInstructions || null,
-      }).returning({ id: orderItems.id }).get();
+      for (const item of cart) {
+        const orderItem = db.insert(orderItems).values({
+          orderId: order.id,
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          itemName: item.itemName,
+          specialInstructions: item.specialInstructions || null,
+        }).returning({ id: orderItems.id }).get();
 
-      for (const mod of item.modifiers) {
-        db.insert(orderItemModifiers).values({
-          orderItemId: orderItem.id,
-          modifierId: mod.id,
-          modifierName: mod.name,
-          priceAdjustment: mod.priceAdjustment,
-        }).run();
+        for (const mod of item.modifiers) {
+          db.insert(orderItemModifiers).values({
+            orderItemId: orderItem.id,
+            modifierId: mod.id,
+            modifierName: mod.name,
+            priceAdjustment: mod.priceAdjustment,
+          }).run();
+        }
       }
-    }
 
-    // Clear cart
-    const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
-    for (const ci of userCartItems) {
-      db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
-    }
-    db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
+      // Clear cart (inside transaction — rolls back if anything above fails)
+      const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
+      for (const ci of userCartItems) {
+        db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
+      }
+      db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
+
+      return order.id;
+    });
 
     revalidatePath("/", "layout");
-    redirect(`/orders/${order.id}`);
+    redirect(`/orders/${orderId}`);
   } catch (e) {
     // redirect() throws a special NEXT_REDIRECT error — must re-throw it
     if (e && typeof e === "object" && "digest" in e) throw e;
@@ -336,7 +345,7 @@ export async function placeOrder(deliveryAddress?: string, deliveryPhone?: strin
 }
 
 // ── Place Order from AI (no redirect, returns orderId) ───────────────────────
-export async function placeOrderFromAI() {
+export async function placeOrderFromAI(tip?: number) {
   const userId = await requireUser();
   if (!userId) return { error: "Not authenticated" };
 
@@ -359,48 +368,54 @@ export async function placeOrderFromAI() {
     const deliveryPhone = userData.phone || null;
 
     const subtotal = cart.reduce((sum, item) => sum + item.lineTotal, 0);
-    const total = subtotal;
+    const tipAmount = tip ?? 0;
+    const total = subtotal + tipAmount;
     const estimatedMinutes = 25 + Math.floor(Math.random() * 20);
 
-    const order = db.insert(orders).values({
-      userId,
-      status: "confirmed",
-      total,
-      deliveryAddress,
-      deliveryPhone,
-      tip: 0,
-      estimatedMinutes,
-    }).returning({ id: orders.id }).get();
+    // Atomic: create order + items + modifiers + clear cart
+    const orderId = withTransaction(() => {
+      const order = db.insert(orders).values({
+        userId,
+        status: "confirmed",
+        total,
+        deliveryAddress,
+        deliveryPhone,
+        tip: tipAmount,
+        estimatedMinutes,
+      }).returning({ id: orders.id }).get();
 
-    for (const item of cart) {
-      const orderItem = db.insert(orderItems).values({
-        orderId: order.id,
-        menuItemId: item.menuItemId,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        itemName: item.itemName,
-        specialInstructions: item.specialInstructions || null,
-      }).returning({ id: orderItems.id }).get();
+      for (const item of cart) {
+        const orderItem = db.insert(orderItems).values({
+          orderId: order.id,
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          itemName: item.itemName,
+          specialInstructions: item.specialInstructions || null,
+        }).returning({ id: orderItems.id }).get();
 
-      for (const mod of item.modifiers) {
-        db.insert(orderItemModifiers).values({
-          orderItemId: orderItem.id,
-          modifierId: mod.id,
-          modifierName: mod.name,
-          priceAdjustment: mod.priceAdjustment,
-        }).run();
+        for (const mod of item.modifiers) {
+          db.insert(orderItemModifiers).values({
+            orderItemId: orderItem.id,
+            modifierId: mod.id,
+            modifierName: mod.name,
+            priceAdjustment: mod.priceAdjustment,
+          }).run();
+        }
       }
-    }
 
-    // Clear cart
-    const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
-    for (const ci of userCartItems) {
-      db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
-    }
-    db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
+      // Clear cart (inside transaction)
+      const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
+      for (const ci of userCartItems) {
+        db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
+      }
+      db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
+
+      return order.id;
+    });
 
     revalidatePath("/", "layout");
-    return { orderId: order.id, estimatedMinutes };
+    return { orderId, estimatedMinutes };
   } catch {
     return { error: "Failed to place order" };
   }

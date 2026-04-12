@@ -15,17 +15,18 @@ export interface PriceFilter {
 }
 
 // ── Category Detection ───────────────────────────────────────────────────────
-// Map user query keywords to Supabase category slugs
+// Map user query keywords to actual Supabase category slugs.
+// Slugs: burgers | pizza | pasta-and-noodles | salads | soups | appetizers | desserts | seafood | steaks-and-grills
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
-  "burgers": ["burger", "burgers", "patty"],
-  "pizza": ["pizza", "pizzas"],
-  "salads": ["salad", "salads"],
-  "pasta": ["pasta", "spaghetti", "noodle"],
-  "seafood": ["fish", "salmon", "shrimp", "crab", "seafood"],
-  "sandwiches": ["sandwich", "wrap", "sub"],
-  "desserts": ["dessert", "cake", "brownie", "tiramisu", "cheesecake", "pudding"],
-  "soups": ["soup", "chowder", "bisque"],
-  "appetizers": ["appetizer", "starter", "wings", "rings"],
+  "burgers": ["burger", "burgers", "patty", "smash burger"],
+  "pizza": ["pizza", "pizzas", "margherita", "pepperoni"],
+  "salads": ["salad", "salads", "caesar", "greek salad"],
+  "pasta-and-noodles": ["pasta", "pastas", "spaghetti", "noodle", "noodles", "carbonara", "fettuccine", "penne", "linguine", "risotto"],
+  "seafood": ["fish", "salmon", "shrimp", "crab", "seafood", "lobster", "scallop", "tuna", "clam", "chowder"],
+  "desserts": ["dessert", "desserts", "cake", "brownie", "tiramisu", "cheesecake", "pudding", "ice cream", "tart", "sweet"],
+  "soups": ["soup", "soups", "bisque", "broth", "stew"],
+  "appetizers": ["appetizer", "appetizers", "starter", "starters", "wings", "rings", "bruschetta", "poppers", "dip"],
+  "steaks-and-grills": ["steak", "steaks", "grill", "grilled", "ribeye", "sirloin", "bbq", "barbecue", "beef"],
 };
 
 function detectCategory(query: string): string | null {

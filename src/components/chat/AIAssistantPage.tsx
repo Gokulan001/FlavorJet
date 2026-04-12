@@ -10,6 +10,8 @@ import Image from "next/image";
 import { Globe, Trash2 } from "lucide-react";
 import { addToCartBySlug, getCart, placeOrderFromAI } from "@/actions/cart-actions";
 import { formatPrice } from "@/lib/utils";
+import { useToast } from "@/components/ui/ToastProvider";
+import { t } from "@/lib/i18n/voiceStrings";
 
 import AIBackground from "./AIBackground";
 import ChatMessages from "./ChatMessages";
@@ -20,6 +22,7 @@ import CartSidebar from "./CartSidebar";
 import CartItemEditModal from "./CartItemEditModal";
 import CheckoutModal from "./CheckoutModal";
 import ModifierTray from "./ModifierTray";
+import { MenuImagesProvider } from "./MenuImagesContext";
 import {
   type ChatMode,
   type Language,
@@ -34,7 +37,7 @@ import {
   LANGUAGES,
 } from "./types";
 
-type VoiceCheckoutStep = "tip_ask" | "tip_amount" | "confirming" | null;
+type VoiceCheckoutStep = "confirm_order" | "tip_ask" | "confirming" | null;
 
 // ── Default suggestions ─────────────────────────────────────────────────────
 
@@ -141,7 +144,7 @@ function tryLocalResponse(text: string): string | null {
 // ── Voice checkout helpers ───────────────────────────────────────────────────
 
 const CHECKOUT_INTENT_RE =
-  /\b(place (my )?order|checkout|check out|finalize|i'?m done|all done|that'?s (all|it)|confirm order|submit order)\b/i;
+  /\b(place (my |the )?order|checkout|check ?out|submit (my |the )?order|finalize (my |the )?order|confirm (my |the )?order)\b/i;
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -158,6 +161,7 @@ interface AIAssistantPageProps {
 
 export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   const router = useRouter();
+  const { toast } = useToast();
 
   // ── Core State ──────────────────────────────────────────────────────────
   const [mode, setMode] = useState<ChatMode>("chat");
@@ -176,6 +180,8 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   const audioChunksRef = useRef<Blob[]>([]);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const micBusyRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // ── Voice checkout state ──────────────────────────────────────────────────
   const [voiceCheckoutStep, setVoiceCheckoutStep] = useState<VoiceCheckoutStep>(null);
@@ -206,6 +212,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   // ── Suggestions ─────────────────────────────────────────────────────────
   const [suggestions, setSuggestions] = useState<string[]>(WELCOME_SUGGESTIONS);
   const [showLangPicker, setShowLangPicker] = useState(false);
+  const langPickerRef = useRef<HTMLDivElement>(null);
 
   // ── User order state ──────────────────────────────────────────────────
   const userOrderState: "guest" | "no-address" | "ready" = !user
@@ -221,6 +228,18 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
     if (savedMode) setMode(savedMode);
     if (savedLang) setLanguage(savedLang);
   }, []);
+
+  // Close language picker on outside click
+  useEffect(() => {
+    if (!showLangPicker) return;
+    function handleClick(e: MouseEvent) {
+      if (langPickerRef.current && !langPickerRef.current.contains(e.target as Node)) {
+        setShowLangPicker(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showLangPicker]);
 
   // ── Fetch cart on mount ───────────────────────────────────────────────
   const refreshCart = useCallback(async () => {
@@ -255,6 +274,20 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { voiceCheckoutStepRef.current = voiceCheckoutStep; }, [voiceCheckoutStep]);
 
+  // P3-2: Cleanup on unmount — stop audio, abort fetches, close AudioContext
+  useEffect(() => () => {
+    if (currentAudioRef.current) {
+      const src = currentAudioRef.current.src;
+      if (src.startsWith("blob:")) URL.revokeObjectURL(src);
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    abortControllerRef.current?.abort();
+    if (audioContextRef.current?.state !== "closed") {
+      try { audioContextRef.current?.close(); } catch { /* noop */ }
+    }
+  }, []);
+
   // ── Stable transport — body reads latest state via ref (never recreates) ──
   const bodyRef = useRef({ language, weather, cartContext, isVoiceMode: false });
   useEffect(() => {
@@ -271,7 +304,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   );
 
   // ── Vercel AI SDK v6 useChat ──────────────────────────────────────────
-  const { messages, sendMessage, status, setMessages } = useChat({
+  const { messages, sendMessage, status, setMessages, stop } = useChat({
     transport,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     onData: (dataPart: any) => {
@@ -288,6 +321,11 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
     onFinish: ({ message }) => {
       const text = getMessageText(message);
 
+      // Track tool results for voice fallback when Gemini returns no text
+      const addedNames: string[] = [];
+      let removedItem = false;
+      let hasModifiers = false;
+
       // Check if add_to_cart or remove_from_cart was called — refresh cart + handle modifier queue
       for (const part of message.parts) {
         if (!part.type.startsWith("tool-")) continue;
@@ -301,23 +339,26 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
         const output = toolPart.output as Record<string, unknown>;
 
         if (toolPart.type === "tool-remove_from_cart" && output.success) {
+          removedItem = true;
           refreshCart();
           router.refresh();
         }
 
         if (toolPart.type === "tool-add_to_cart") {
-          // Refresh cart if any items were added (not just when ALL succeed)
+          const added = output.added as string[] | undefined;
+          if (added) addedNames.push(...added);
+          // Refresh cart if any items were added
           const addedSlugs = output.addedSlugs as string[] | undefined;
           if (addedSlugs && addedSlugs.length > 0) {
             refreshCart();
             router.refresh();
           }
-          // Open modifier tray — both chat and voice mode use modal
+          // Open modifier tray
           const needsMods = output.needsModifiers as { slug: string; name: string }[] | undefined;
           if (needsMods && needsMods.length > 0) {
+            hasModifiers = true;
             setActiveModifierSlug(needsMods[0].slug);
             setPendingModifierQueue(needsMods.slice(1).map((i) => i.slug));
-            // In voice mode: don't auto-listen while modifier modal is open
             if (modeRef.current === "voice") {
               autoListenRef.current = false;
             }
@@ -325,20 +366,34 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
         }
       }
 
+      // Build voice fallback when Gemini produced no text but tools ran
+      let voiceText = text;
+      if (!voiceText && modeRef.current === "voice" && message.role === "assistant") {
+        if (addedNames.length > 0 && !hasModifiers) {
+          voiceText = `Added ${addedNames.join(" and ")}! Anything else?`;
+        } else if (addedNames.length > 0 && hasModifiers) {
+          voiceText = `Added ${addedNames.join(" and ")}. Some items need customization, check the options.`;
+        } else if (removedItem) {
+          voiceText = "Removed from your cart. Anything else?";
+        }
+      }
+
       // Update voice state
       if (message.role === "assistant") {
-        setLastResponse(text);
+        setLastResponse(voiceText || text);
         setSuggestions([]);
       }
 
-      // TTS in voice mode — enable auto-listen after speech ends
-      if (modeRef.current === "voice" && message.role === "assistant") {
+      // TTS in voice mode — direct call like original (ref approach caused silent failures)
+      if (modeRef.current === "voice" && message.role === "assistant" && voiceText) {
         autoListenRef.current = true;
-        speakText(text);
+        speakText(voiceText);
       }
     },
     onError: (err) => {
       console.error("[Chat error]", err);
+      toast(t(language, "aiFailed"), "error");
+      autoListenRef.current = false;
     },
   });
 
@@ -413,6 +468,11 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
           makeUIMessage("user", text),
           makeUIMessage("assistant", local),
         ]);
+        // In voice mode: speak the local response with audio feedback
+        if (modeRef.current === "voice") {
+          autoListenRef.current = true;
+          speakText(local);
+        }
         return;
       }
       sendMessage({ text });
@@ -431,8 +491,10 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
             : result.error === "item_not_found"
             ? "Item not found. Please try again!"
             : "Couldn't add that item. Please try again!";
+        toast(msg, "error");
         setMessages((prev) => [...prev, makeUIMessage("assistant", msg)]);
       } else {
+        toast(t(language, "addedToCart"), "success");
         setMessages((prev) => [
           ...prev,
           makeUIMessage("assistant", "Added to your cart! Anything else?"),
@@ -441,7 +503,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
         router.refresh();
       }
     },
-    [router, setMessages, refreshCart]
+    [router, setMessages, refreshCart, toast]
   );
 
   const handleCustomize = useCallback((slug: string) => {
@@ -457,6 +519,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
           result.error === "not_authenticated"
             ? "You need to log in first to add items to cart."
             : "Couldn't add that item. Please try again!";
+        toast(msg, "error");
         if (modeRef.current === "voice") {
           autoListenRef.current = true;
           speakText(msg);
@@ -464,6 +527,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
           setMessages((prev) => [...prev, makeUIMessage("assistant", msg)]);
         }
       } else {
+        toast(t(language, "customizedAdded"), "success");
         refreshCart();
         router.refresh();
         if (modeRef.current === "voice") {
@@ -480,8 +544,6 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
       setPendingModifierQueue((prev) => {
         if (prev.length > 0) {
           setActiveModifierSlug(prev[0]);
-          // Keep autoListen off while next modal opens
-          if (modeRef.current === "voice") autoListenRef.current = false;
           return prev.slice(1);
         }
         return prev;
@@ -505,7 +567,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   async function placeVoiceOrder(tip: number) {
     setVoiceCheckoutStep("confirming");
     try {
-      const result = await placeOrderFromAI();
+      const result = await placeOrderFromAI(tip);
       if (!result || "error" in result) {
         setVoiceCheckoutStep(null);
         setVoiceCheckoutRetry(0);
@@ -533,15 +595,25 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   async function handleVoiceCheckout() {
     if (!cartContext || cartContext.items.length === 0) {
       autoListenRef.current = true;
-      speakText("Your cart is empty. Add some items first!");
+      speakText(t(language, "cartEmpty"));
+      return;
+    }
+    if (userOrderState === "guest") {
+      autoListenRef.current = true;
+      speakText(t(language, "notLoggedIn"));
+      return;
+    }
+    if (userOrderState === "no-address") {
+      autoListenRef.current = true;
+      speakText(t(language, "noAddress"));
       return;
     }
     const itemList = cartContext.items.map((i) => `${i.qty} ${i.name}`).join(", ");
-    setVoiceCheckoutStep("tip_ask");
-    voiceCheckoutStepRef.current = "tip_ask";
+    setVoiceCheckoutStep("confirm_order");
+    voiceCheckoutStepRef.current = "confirm_order";
     autoListenRef.current = true;
     speakText(
-      `You have ${itemList}. Total is ${cartContext.total}. Would you like to add a tip? Say yes or no.`
+      `You have ${itemList}. Total is ${cartContext.total}. Shall I place this order?`
     );
   }
 
@@ -550,37 +622,55 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
     const step = voiceCheckoutStepRef.current;
     const lower = text.toLowerCase().trim();
 
-    if (step === "tip_ask") {
-      const isYes = /\b(yes|yeah|yep|sure|ok|okay|yea|add|absolutely|definitely)\b/i.test(lower);
-      const isNo = /\b(no|nope|none|skip|zero|nothing|don't|dont|nah|pass)\b/i.test(lower);
+    // Step 1: Confirm order
+    if (step === "confirm_order") {
+      const isYes = /\b(yes|yeah|yep|sure|ok|okay|yea|absolutely|definitely|go|do it|place|confirm)\b/i.test(lower);
+      const isNo = /\b(no|nope|nah|cancel|stop|wait|hold|don't|dont|not yet)\b/i.test(lower);
       if (isYes) {
-        setVoiceCheckoutStep("tip_amount");
-        voiceCheckoutStepRef.current = "tip_amount";
+        setVoiceCheckoutStep("tip_ask");
+        voiceCheckoutStepRef.current = "tip_ask";
+        setVoiceCheckoutRetry(0);
         autoListenRef.current = true;
-        speakText("How much? Just say the number, like 5 or 10.");
+        speakText(
+          "Would you like to add a tip? Say a number like 5 or 10 dollars, or say no tip."
+        );
       } else if (isNo) {
         setVoiceCheckoutStep(null);
         voiceCheckoutStepRef.current = null;
-        await placeVoiceOrder(0);
+        autoListenRef.current = true;
+        speakText("No problem, keep browsing!");
       } else {
         autoListenRef.current = true;
-        speakText("Just say yes or no — would you like to add a tip?");
+        speakText("Just say yes to place the order, or no to cancel.");
       }
       return;
     }
 
-    if (step === "tip_amount") {
+    // Step 2: Combined tip (number OR "no")
+    if (step === "tip_ask") {
       const match = text.match(/(\d+(?:\.\d+)?)/);
+      const isNo = /\b(no|nope|none|skip|zero|nothing|don't|dont|nah|pass)\b/i.test(lower);
+      const isYesOnly = /\b(yes|yeah|yep|sure|ok|okay)\b/i.test(lower) && !match;
+
       if (match) {
         const amount = parseFloat(match[1]);
         setVoiceCheckoutStep(null);
         voiceCheckoutStepRef.current = null;
         setVoiceCheckoutRetry(0);
         await placeVoiceOrder(amount);
-      } else if (voiceCheckoutRetry < 1) {
+      } else if (isNo) {
+        setVoiceCheckoutStep(null);
+        voiceCheckoutStepRef.current = null;
+        setVoiceCheckoutRetry(0);
+        await placeVoiceOrder(0);
+      } else if (isYesOnly && voiceCheckoutRetry < 1) {
         setVoiceCheckoutRetry((r) => r + 1);
         autoListenRef.current = true;
-        speakText("Just say the number. For example, 10.");
+        speakText("How much? Just say the number, like 5 or 10.");
+      } else if (voiceCheckoutRetry < 2) {
+        setVoiceCheckoutRetry((r) => r + 1);
+        autoListenRef.current = true;
+        speakText("Say a number for the tip, or say no tip.");
       } else {
         // Fallback: show visual tip picker
         setVoiceCheckoutStep(null);
@@ -595,6 +685,8 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   // ── Voice: STT via server proxy ───────────────────────────────────────
 
   async function startListening() {
+    if (micBusyRef.current) return;
+    micBusyRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -624,28 +716,47 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
           } catch {
             // AudioContext already closed, ignore
           }
+          if (audioContextRef.current === audioCtx) {
+            audioContextRef.current = null;
+          }
           setAnalyserNode(null);
 
           if (audioChunksRef.current.length === 0) {
             setVoiceState("idle");
             mediaRecorderRef.current = null;
+            micBusyRef.current = false;
             return;
           }
 
           setVoiceState("processing");
           const blob = new Blob(audioChunksRef.current, { type: mimeType });
+
+          // P2-1: Skip STT for empty/tiny recordings (fast mic on/off)
+          if (blob.size < 1000) {
+            toast(t(language, "speakLonger"), "info");
+            setVoiceState("idle");
+            mediaRecorderRef.current = null;
+            micBusyRef.current = false;
+            return;
+          }
+
           const formData = new FormData();
           formData.append("file", blob, "recording.webm");
           formData.append("language", language.split("-")[0]);
 
+          // P3-1: AbortController for STT fetch
+          abortControllerRef.current?.abort();
+          const ac = new AbortController();
+          abortControllerRef.current = ac;
+
           try {
-            const res = await fetch("/api/stt", { method: "POST", body: formData });
+            const res = await fetch("/api/stt", { method: "POST", body: formData, signal: ac.signal });
             if (!res.ok) throw new Error("STT failed");
             const result = await res.json();
-            if (result.text?.trim() && result.text.trim().length >= 2) {
+            const minLen = voiceCheckoutStepRef.current ? 1 : 2;
+            if (result.text?.trim() && result.text.trim().length >= minLen) {
               const transcribedText = result.text.trim();
               setTranscript(transcribedText);
-              // Route: checkout flow → checkout handler; checkout intent → start checkout; else → AI
               if (voiceCheckoutStepRef.current) {
                 handleVoiceCheckoutResponse(transcribedText);
               } else if (
@@ -658,19 +769,26 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
                 handleSendText(transcribedText);
               }
             } else {
-              // Empty / unclear audio — just go idle
               setVoiceState("idle");
               mediaRecorderRef.current = null;
             }
           } catch (err) {
-            console.error("[STT]", err);
-            setVoiceState("idle");
+            if ((err as Error).name === "AbortError") {
+              // Cancelled by user — silent
+              setVoiceState("idle");
+            } else {
+              console.error("[STT]", err);
+              toast(t(language, "voiceFailed"), "error");
+              setVoiceState("idle");
+            }
             mediaRecorderRef.current = null;
           }
         } catch (err) {
           console.error("[Recorder cleanup error]", err);
           setVoiceState("idle");
           mediaRecorderRef.current = null;
+        } finally {
+          micBusyRef.current = false;
         }
       };
 
@@ -678,12 +796,16 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
       mediaRecorderRef.current = recorder;
       setVoiceState("listening");
       setTranscript("");
+      setLastResponse("");
 
       setTimeout(() => {
         if (recorder.state === "recording") recorder.stop();
       }, 30000);
     } catch {
       console.error("[STT] Mic permission denied");
+      toast(t(language, "micDenied"), "error");
+      setVoiceState("idle");
+      micBusyRef.current = false;
     }
   }
 
@@ -691,11 +813,24 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop();
     }
+    // Reset auto-listen flag when user manually stops
+    autoListenRef.current = false;
   }
 
   function toggleMic() {
     if (voiceState === "listening") {
       stopListening();
+    } else if (voiceState === "speaking") {
+      // P2-3: Cancel playback, go idle
+      stopSpeaking();
+      setVoiceState("idle");
+    } else if (voiceState === "processing") {
+      // Cancel both STT fetch and AI streaming
+      abortControllerRef.current?.abort();
+      stop();
+      autoListenRef.current = false;
+      micBusyRef.current = false;
+      setVoiceState("idle");
     } else if (voiceState === "idle") {
       stopSpeaking();
       startListening();
@@ -725,6 +860,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: text.slice(0, 500), language }),
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!res.ok) throw new Error("TTS failed");
@@ -742,28 +878,40 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
       audioContextRef.current = audioCtx;
       setAnalyserNode(analyser);
 
-      audio.onended = () => {
+      const cleanupAudio = () => {
         URL.revokeObjectURL(url);
         setIsSpeaking(false);
         setVoiceState("idle");
         setAnalyserNode(null);
         currentAudioRef.current = null;
-        audioCtx.close();
-        // Pending redirect (after order placed announcement)
+        try { audioCtx.close(); } catch { /* already closed */ }
+        audioContextRef.current = null;
+      };
+
+      audio.onended = () => {
+        cleanupAudio();
         if (pendingRedirectRef.current) {
           const path = pendingRedirectRef.current;
           pendingRedirectRef.current = null;
           setTimeout(() => router.push(path), 800);
           return;
         }
-        // Auto-listen after AI speech
-        if (modeRef.current === "voice" && autoListenRef.current) {
+        // Auto-listen after AI speaks (original behavior)
+        // Guard: only auto-listen if in voice mode, flag is set, and not already busy
+        if (modeRef.current === "voice" && autoListenRef.current && !micBusyRef.current) {
           autoListenRef.current = false;
-          setTimeout(() => startListening(), 350);
+          setTimeout(() => {
+            if (!micBusyRef.current) startListening();
+          }, 350);
         }
+      };
+      audio.onerror = () => {
+        cleanupAudio();
+        toast(t(language, "playbackFailed"), "error");
       };
       audio.play();
     } catch {
+      toast(t(language, "playbackFailed"), "error");
       setIsSpeaking(false);
       setVoiceState("idle");
     }
@@ -771,12 +919,16 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
 
   function stopSpeaking() {
     if (currentAudioRef.current) {
+      // P3-2: Revoke blob URL on manual stop
+      const src = currentAudioRef.current.src;
+      if (src.startsWith("blob:")) URL.revokeObjectURL(src);
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
-    if (audioContextRef.current?.state !== "closed") {
-      audioContextRef.current?.close();
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      try { audioContextRef.current.close(); } catch { /* already closed */ }
     }
+    audioContextRef.current = null;
     setIsSpeaking(false);
     setAnalyserNode(null);
   }
@@ -877,6 +1029,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
   // ── Render ────────────────────────────────────────────────────────────
 
   return (
+    <MenuImagesProvider>
     <div className="flex flex-col overflow-hidden" style={{ height: "calc(100dvh - 80px)" }}>
       <AIBackground />
 
@@ -1062,7 +1215,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
               {/* Right: controls */}
               <div className="flex items-center gap-0.5">
                 {/* Debug: token badge */}
-                <TokenBadge usage={tokenUsage} model="Gemini 2.5 Flash" />
+                {/* <TokenBadge usage={tokenUsage} model="Gemini 2.5 Flash" /> */}
 
                 {/* Mode switch */}
                 <button
@@ -1078,7 +1231,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
                 </button>
 
                 {/* Language picker */}
-                <div className="relative">
+                <div className="relative" ref={langPickerRef}>
                   <button
                     onClick={() => setShowLangPicker(!showLangPicker)}
                     className="p-2 rounded-xl text-slate-400 hover:text-[#fea116] hover:bg-[#fea116]/10 transition-all"
@@ -1174,7 +1327,7 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
                 audioRef={currentAudioRef}
                 cartCount={cartContext?.items.reduce((s, i) => s + i.qty, 0) ?? 0}
                 cartTotal={cartContext?.total ?? "$0.00"}
-                onCheckout={() => setShowCheckout(true)}
+                onCheckout={handleVoiceCheckout}
               />
             )}
           </div>
@@ -1203,5 +1356,6 @@ export default function AIAssistantPage({ user }: AIAssistantPageProps) {
         </div>
       )}
     </div>
+    </MenuImagesProvider>
   );
 }

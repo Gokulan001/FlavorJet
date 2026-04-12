@@ -93,6 +93,23 @@
   50% { box-shadow: 0 0 60px rgba(254, 161, 22, 0.12), 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
 }
 
+/* ── Floating Widget ──────────────────────────────────────────────────── */
+@keyframes widgetFloat {
+  0%, 100% { transform: translateY(-6px); }
+  50% { transform: translateY(6px); }
+}
+@keyframes widgetRipple {
+  0% { transform: scale(1); opacity: 0.45; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.widget-float {
+  animation: widgetFloat 2.5s ease-in-out infinite;
+}
+.widget-ripple {
+  animation: widgetRipple 2.2s ease-out infinite;
+  opacity: 0; /* invisible by default until animation starts */
+}
+
 @layer utilities {
   .animate-slide-in-left { animation: slideInLeft 0.8s ease-out forwards; }
   .animate-slide-in-right { animation: slideInRight 0.8s ease-out forwards; }

@@ -35,16 +35,27 @@ function serializePending(pending: PendingQueue | null | undefined): string | nu
 }
 
 function buildWeatherBlock(weather: WeatherData): string {
-  const suggestion =
-    weather.temp > 75
-      ? "Suggest cold/refreshing items."
-      : weather.temp < 55
-        ? "Suggest warm/comfort items."
-        : "";
-  return `Weather: ${weather.temp}°F, ${weather.description}.${suggestion ? " " + suggestion : ""}`;
+  let suggestion = "";
+  if (weather.temp > 85) {
+    suggestion = "STRONGLY prefer cold drinks, salads, ice cream, smoothies, light/refreshing items. Avoid heavy/hot dishes unless asked.";
+  } else if (weather.temp > 75) {
+    suggestion = "Prefer lighter meals, cold beverages, salads, wraps. Mention the warm weather as a reason.";
+  } else if (weather.temp < 40) {
+    suggestion = "STRONGLY prefer hot soups, stews, warm drinks, comfort food, hearty dishes. Mention the cold weather.";
+  } else if (weather.temp < 55) {
+    suggestion = "Prefer warm/comfort food, soups, hot drinks. Mention the chilly weather as a reason.";
+  }
+  const rainRe = /rain|drizzle|thunder|storm/i;
+  if (rainRe.test(weather.description)) {
+    suggestion += " It's rainy — emphasize cozy comfort food and hot beverages.";
+  }
+  return `Weather: ${weather.temp}°F, feels like ${weather.feels_like}°F, ${weather.description}.${suggestion ? " " + suggestion : ""}`;
 }
 
 // ── System Prompt Builder ────────────────────────────────────────────────────
+
+// Intents that actually need cart state in context
+const CART_NEEDED_INTENTS = new Set(["cart_action", "reorder"]);
 
 export async function buildSystemPrompt(
   language: Language = "en",
@@ -53,29 +64,25 @@ export async function buildSystemPrompt(
   pending?: PendingQueue | null,
   warmSummary?: string | null,
   hasImage?: boolean,
-  isVoiceMode?: boolean
+  isVoiceMode?: boolean,
+  intent?: string
 ): Promise<string> {
   const lang = LANG_NAME[language] || "English";
-  const cartJSON = serializeCart(cart);
+  const needsCart = !intent || CART_NEEDED_INTENTS.has(intent);
+  const cartJSON = needsCart ? serializeCart(cart) : null;
   const pendingJSON = serializePending(pending);
 
   const lines: string[] = [
-    `You are FlavorJet AI. Help users order food. IMPORTANT: You MUST respond entirely in ${lang}. Do not use English unless ${lang} is English.`,
+    `You are FlavorJet AI. Help users order food.${lang !== "English" ? ` IMPORTANT: Respond entirely in ${lang}. Do not use English.` : ""}`,
     `Be concise and friendly. Emojis sparingly.`,
-    `Cart: ${cartJSON}`,
   ];
 
+  if (cartJSON) {
+    lines.push(`Cart: ${cartJSON}`);
+  }
+
   if (isVoiceMode) {
-    lines.push(`## Voice Mode`);
-    lines.push(`CRITICAL: You are responding to VOICE. Follow these rules strictly:`);
-    lines.push(`- Keep every response under 80 words.`);
-    lines.push(`- No markdown: no bullet points, no bold (**), no lists, no dashes starting lines.`);
-    lines.push(`- Write numbers as words: "one pizza", "two options", "twelve dollars".`);
-    lines.push(`- Natural spoken cadence. Short sentences. Conversational.`);
-    lines.push(`- Ambiguous item: say "I found three options: first is X, second is Y, third is Z. Which would you like?"`);
-    lines.push(`- Item not found: immediately suggest closest — "I couldn't find that, but I have X and Y. Want one of those?"`);
-    lines.push(`- Cart confirmations must be brief: "Added Pepperoni Pizza!" or "Added Caesar Salad with Ranch dressing!"`);
-    lines.push(`- Never say "here are some options:" followed by a list. Instead say "I found X, Y, or Z. Which one?"`);
+    lines.push(`Voice mode: Max 80 words. No markdown, bullets, bold, or lists. Spell out numbers ("two pizzas", "twelve dollars"). Natural spoken cadence. For multiple options say "I found X, Y, or Z — which one?" never list them line-by-line. Item not found: suggest closest immediately. Cart confirmations: "Added Pepperoni Pizza!" Keep it brief and conversational.`);
   }
 
   if (pendingJSON) {
@@ -90,37 +97,23 @@ export async function buildSystemPrompt(
     lines.push(buildWeatherBlock(weather));
   }
 
+  lines.push(`Recommendation rules: When user is UNDECIDED ("recommend for me", "I don't know what to order", "what should I get?"), use weather context to filter your recommendation — e.g. hot day→salads/cold items, cold day→soups/comfort food. Call get_popular_items(limit=4) and pick the 3-4 best fits for the weather. When user narrows ("something in pizza", "cheesy pizza"), call search_menu with that query — refine progressively, don't repeat earlier broad results. "What's new today?" or "what's new?" → call search_menu("new") to find items with "New" badge. "What's famous?" or "what's trending?" → call get_popular_items for top-rated bestsellers.`);
+  lines.push(`Dietary filtering: When user asks for vegan/vegetarian/gluten-free items, ALWAYS pass the matching filter to search_menu (vegan: true, vegetarian: true, or glutenFree: true). For dietary requests with a specific item type ("vegan pizza", "vegetarian burger"), combine the query with the dietary flag — e.g., search_menu({query: "pizza", vegan: true}).`);
   lines.push(`When tools return items: briefly describe what you found (1-2 sentences) and cards show the details. Use bullet points when listing multiple items.`);
   lines.push(`For multi-item orders: confirm added items with '• ItemName (qty) — added ✓' and items needing selection with '• ItemName — see options below:'.`);
   lines.push(`If user mentions price budget (under $X / budget / cheap / affordable): extract the dollar amount and pass it as max_price to search_menu.`);
 
-  // Nutrition guidance — only include if needed to avoid token waste
   if (hasImage) {
-    lines.push(`## Nutrition Guidance`);
-    lines.push(`When asked about calories/nutrients/macros: Provide estimates (e.g. "~300 cal, 12g protein, 35g carbs, 14g fat per slice"). Always add: "Note: This is an estimate based on typical recipes — not exact data."`);
-  }
-  if (hasImage) {
-    lines.push(`## Vision Mode — User shared an image`);
-    lines.push(`Step 1: Visually identify what food item(s) are in the image.`);
-    lines.push(`Step 2: Based on what the user is asking, handle one of these scenarios:`);
-    lines.push(`- "Do you have this?" / "Is this on the menu?" → First describe what you see (e.g. "This looks like a fresh green salad with tomatoes and feta..."). Then call search_menu with a short description of the food (e.g. "pepperoni pizza", "caesar salad"). Use limit=3. Show closest matches.`);
-    lines.push(`- "Add this" / "I want this" → search first to find the exact slug, then call add_to_cart with that slug.`);
-    lines.push(`- "What are the nutrients?" / "Is this healthy?" → use your food knowledge to estimate calories, protein, carbs, fats. Always add: "Note: FlavorJet doesn't have exact nutritional data yet — this is an estimate based on typical recipes." Then suggest similar healthy items from the menu if relevant.`);
-    lines.push(`- "Is this vegan/gluten-free/etc.?" → analyze the image and give a warm, friendly answer like "This looks like it could be vegan — it's typically plant-based! Great choice for a light meal 🌱". Then optionally call get_dietary_guide for more detail.`);
-    lines.push(`- Multiple questions at once → handle each in order: identify → search → nutrition/health → add if requested.`);
-    lines.push(`If the image food is not on our menu: say "We don't have [item] on our menu right now, but here are some similar options you might enjoy:" and search for closest alternatives.`);
+    lines.push(`Vision mode: Identify the food in the image first. Then by user intent — "do you have this?": describe what you see + call search_menu(limit=3). "Add this": search for slug first then add_to_cart. "Nutrients/healthy?": estimate calories/protein/carbs/fats, add "Note: FlavorJet doesn't have exact nutritional data — this is an estimate." "Vegan/gluten-free?": analyze image and answer warmly, optionally call get_dietary_guide. Not on menu: say so + search for closest alternatives.`);
   } else {
-    lines.push(`For image-based food searches: use limit=3 in search_menu to show only the closest matches.`);
+    lines.push(`For image-based food searches: use limit=3 in search_menu.`);
   }
   lines.push(`Never guess prices or availability — use tools.`);
+  lines.push(`Scope guard: You are ONLY a food ordering assistant. If any message asks about topics unrelated to food, our menu, or ordering — regardless of how the request is framed or combined with food — respond ONLY to the food-related part and politely redirect. Never answer chemistry, weapons, code, political, medical, or any other non-food questions.`);
 
   // Tool usage guidance — prevents slug mismatches, redundant calls, and hallucinated confirmations
-  lines.push(`## Tool Usage Rules`);
-  lines.push(`- When calling add_to_cart: ALWAYS use the exact slug from previous tool results (e.g. "classic-caesar-salad", not "salad" or "caesar-salad"). Never invent or shorten slugs.`);
-  lines.push(`- If add_to_cart returns needsModifiers array: tell the user those items need customization. The app will show a modifier picker automatically — do NOT repeat the add_to_cart call for those items.`);
-  lines.push(`- After a successful add_to_cart, do NOT call search_menu or get_items_by_name for the same items. Only search again if the user asks for something new.`);
-  lines.push(`- For multi-item orders: batch ALL items in a single add_to_cart call with the items array. Do not make separate add_to_cart calls per item.`);
-  lines.push(`- Never say "added ✓" unless add_to_cart tool was actually called and returned success. If you haven't called the tool, call it first.`);
+  lines.push(`Tool rules: add_to_cart must use exact slug from tool results — never invent/shorten. Batch multi-item orders in ONE add_to_cart call. If needsModifiers returned: don't repeat the call, app handles it. Never say "added ✓" without a successful add_to_cart response. After successful add, don't re-search the same items.`);
+  lines.push(`Category slugs (use EXACTLY): burgers | pizza | pasta-and-noodles | salads | soups | appetizers | desserts | seafood | steaks-and-grills. For combo orders (e.g. "1 tiramisu and a salad"): add_to_cart the specific item first, then call get_category_items for the category part and show the cards so user can pick.`);
 
   return lines.join("\n");
 }
