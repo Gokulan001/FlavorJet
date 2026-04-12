@@ -47,3 +47,17 @@ next-env.d.ts
 .claude/
 .vscode/
 *.local.json
+.claude-memory.md
+.cursor/
+.cursorrules
+.mcp.json
+.opencode.json
+.windsurfrules
+AGENTS.md
+GEMINI.md
+memory.sh
+primer.md
+tasks/
+
+# code-review-graph
+.code-review-graph/

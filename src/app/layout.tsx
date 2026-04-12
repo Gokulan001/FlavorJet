@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Poppins } from "next/font/google";
+import { Poppins, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
@@ -15,10 +15,19 @@ const poppins = Poppins({
   variable: "--font-poppins",
 });
 
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-space-grotesk",
+});
+
 export const metadata: Metadata = {
   title: "FlavorJet",
   description: "FlavorJet - Premium Dining Experience. Order delicious food online.",
-  icons: { icon: "/favicon.svg" },
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg",
+  },
 };
 
 export default async function RootLayout({
@@ -42,7 +51,7 @@ export default async function RootLayout({
           }}
         />
       </head>
-      <body className={`${poppins.variable} antialiased bg-white dark:bg-[#0b1120] text-[#1a2428] dark:text-slate-200`}>
+      <body className={`${poppins.variable} ${spaceGrotesk.variable} antialiased bg-white dark:bg-[#0b1120] text-[#1a2428] dark:text-slate-200`}>
         <ThemeProvider>
           <ToastProvider>
             <Navbar user={userData} cartCount={cartCount} />

@@ -12,9 +12,16 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "lat and lon required" }, { status: 400 });
   }
 
+  // Validate lat/lon are valid numbers in range
+  const latNum = parseFloat(lat);
+  const lonNum = parseFloat(lon);
+  if (isNaN(latNum) || isNaN(lonNum) || latNum < -90 || latNum > 90 || lonNum < -180 || lonNum > 180) {
+    return Response.json({ error: "Invalid lat/lon values" }, { status: 400 });
+  }
+
   const apiKey = process.env.OPENWEATHERMAP_API_KEY;
   if (!apiKey) {
-    return Response.json({ error: "Weather API not configured" }, { status: 500 });
+    return Response.json({ error: "Weather API not configured" }, { status: 503 });
   }
 
   // Check cache
@@ -26,10 +33,17 @@ export async function GET(req: NextRequest) {
 
   try {
     const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=imperial&appid=${apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Weather API: ${res.status}`);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
 
-    const data = await res.json();
+    if (!res.ok) {
+      if (res.status === 401) return Response.json({ error: "Weather API misconfigured" }, { status: 503 });
+      if (res.status === 429) return Response.json({ error: "Rate limited" }, { status: 429, headers: { "Retry-After": "60" } });
+      throw new Error(`Weather API: ${res.status}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let data: any;
+    try { data = await res.json(); } catch { return Response.json({ error: "Invalid weather response" }, { status: 502 }); }
     const weather = {
       temp: Math.round(data.main.temp),
       feels_like: Math.round(data.main.feels_like),

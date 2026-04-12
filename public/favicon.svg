@@ -1,11 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#0f172b"/>
-  <g transform="translate(6, 4)" fill="none" stroke="#fea116" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M10 2c0 4-4 6-4 10a4 4 0 0 0 8 0c0-4-4-6-4-10z" fill="#fea116" opacity="0.3"/>
-    <path d="M10 2c0 4-4 6-4 10a4 4 0 0 0 8 0c0-4-4-6-4-10z"/>
-    <line x1="7" y1="16" x2="7" y2="22"/>
-    <line x1="10" y1="14" x2="10" y2="22"/>
-    <line x1="13" y1="16" x2="13" y2="22"/>
-    <path d="M5 22h10" stroke-width="2.5"/>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fea116"/>
+      <stop offset="100%" stop-color="#e8900f"/>
+    </linearGradient>
+  </defs>
+  <!-- Orange gradient rounded square matching the logo badge -->
+  <rect width="32" height="32" rx="7" fill="url(#g)"/>
+  <!-- Lucide Flame icon, white, scaled to 18x18 and centered -->
+  <g transform="translate(7,7) scale(0.75)" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
   </g>
 </svg>

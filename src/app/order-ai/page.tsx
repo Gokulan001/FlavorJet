@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { verifyAuth } from "@/lib/auth";
 import { getUserAddress } from "@/actions/cart-actions";
 import AIAssistantPage from "@/components/chat/AIAssistantPage";
+import ErrorBoundary from "@/components/error/ErrorBoundary";
 
 export const metadata: Metadata = {
   title: "AI Assistant | FlavorJet",
@@ -29,5 +30,9 @@ export default async function OrderAIPage() {
     addressString,
   };
 
-  return <AIAssistantPage user={userData} />;
+  return (
+    <ErrorBoundary>
+      <AIAssistantPage user={userData} />
+    </ErrorBoundary>
+  );
 }

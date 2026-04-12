@@ -71,7 +71,7 @@ export default function ChatHeader({
       {/* Right: Controls */}
       <div className="flex items-center gap-0.5">
         {/* Token Badge */}
-        <TokenBadge usage={tokenUsage} model={modelName} />
+        {/* <TokenBadge usage={tokenUsage} model={modelName} /> */}
 
         {/* Mode Switch */}
         <button

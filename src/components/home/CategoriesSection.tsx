@@ -44,24 +44,30 @@ export default function CategoriesSection() {
             <Link
               key={category.id}
               href={`/menu/${category.slug}`}
-              className="group relative rounded-2xl p-4 sm:p-5 lg:p-6 text-center transition-all duration-300 hover:-translate-y-2 hover:shadow-xl dark:!bg-slate-800"
+              className="group relative block rounded-2xl p-4 sm:p-5 lg:p-6 text-center transition-all duration-300 hover:-translate-y-2 hover:shadow-xl"
               style={{ backgroundColor: category.bgColor }}
             >
-              <div className="relative w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 rounded-full overflow-hidden">
+              {/* Image Circle */}
+              <div className="relative w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-3 sm:mb-4 rounded-full overflow-hidden shadow-md">
                 <Image
                   src={category.imageUrl}
                   alt={category.name}
                   fill
                   className="object-cover group-hover:scale-110 transition-transform duration-300"
                   sizes="96px"
+                  priority={false}
                 />
               </div>
-              <h3 className="font-semibold text-[#0f172b] dark:text-white text-sm sm:text-base mb-1">
+
+              {/* Text Content */}
+              <h3 className="font-semibold text-[#0f172b] dark:text-white text-sm sm:text-base mb-1 line-clamp-1">
                 {category.name}
               </h3>
-              <p className="text-xs text-gray-500 dark:text-slate-400 line-clamp-2 mb-3">
+              <p className="text-xs text-gray-600 dark:text-slate-400 line-clamp-2 mb-3 min-h-8">
                 {category.description}
               </p>
+
+              {/* Arrow Icon */}
               <ArrowRight className="w-4 h-4 text-[#fea116] mx-auto opacity-0 group-hover:opacity-100 transition-all duration-300 group-hover:translate-x-1" />
             </Link>
           ))}

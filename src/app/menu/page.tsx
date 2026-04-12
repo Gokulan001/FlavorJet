@@ -5,6 +5,9 @@ import { db } from "@/db";
 import { categories, menuItems } from "@/db/schema";
 import { asc, eq, count } from "drizzle-orm";
 
+// ISR: regenerate every 10 minutes — categories/counts are static
+export const revalidate = 600;
+
 export const metadata = {
   title: "Menu | FlavorJet",
   description: "Browse our delicious menu categories",

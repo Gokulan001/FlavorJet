@@ -5,10 +5,11 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useTransition } from "react";
 import { motion, AnimatePresence, useScroll, useMotionValueEvent } from "framer-motion";
-import { Flame, ShoppingCart, Menu, X, LogOut, User, Loader2, Sun, Moon, Search, Bot } from "lucide-react";
+import { ShoppingCart, Menu, X, LogOut, User, Loader2, Sun, Moon, Search, Bot } from "lucide-react";
 import { logout } from "@/actions/auth-actions";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/components/ThemeProvider";
+import LogoText from "./LogoText";
 
 interface NavbarProps {
   user: { username: string; profilePicture: string | null } | null;
@@ -73,27 +74,8 @@ export default function Navbar({ user, cartCount }: NavbarProps) {
         >
           <div className="flex items-center justify-between h-10">
             {/* Logo */}
-            <Link href="/" className="flex items-center gap-2 group shrink-0">
-              <div className={cn(
-                "relative flex items-center justify-center rounded-xl transition-all duration-300",
-                showPill
-                  ? "w-8 h-8 bg-[#fea116] shadow-sm"
-                  : "w-9 h-9 bg-[#fea116] shadow-md shadow-[#fea116]/20 group-hover:shadow-[#fea116]/40"
-              )}>
-                <Flame className={cn("text-[#0f172b]", showPill ? "w-4 h-4" : "w-5 h-5")} />
-              </div>
-              <div className="flex items-baseline gap-0.5">
-                <span className={cn(
-                  "font-bold tracking-tight text-[#fea116]",
-                  showPill ? "text-lg" : "text-xl"
-                )}>Flavor</span>
-                <span className={cn(
-                  "font-bold tracking-tight transition-colors duration-500",
-                  showPill
-                    ? "text-lg text-white"
-                    : "text-xl text-white"
-                )}>Jet</span>
-              </div>
+            <Link href="/" className="flex items-center gap-2 shrink-0">
+              <LogoText showPill={showPill} size={showPill ? "sm" : "md"} />
             </Link>
 
             {/* Desktop Nav — centered links */}

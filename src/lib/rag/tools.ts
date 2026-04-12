@@ -62,12 +62,11 @@ function getItemDisplayExtras(slug: string): { hasModifiers: boolean } {
 }
 
 function toMinimalItem(item: MenuItemResult, extras: { hasModifiers: boolean }) {
+  // id + imageUrl excluded: LLM uses slug not IDs; images fetched client-side via /api/menu/images
   return {
-    id: item.id,
     name: item.name,
     price: item.price,
     slug: item.slug,
-    imageUrl: item.imageUrl,
     rating: item.rating,
     hasModifiers: extras.hasModifiers,
     vegan: item.isVegan,
@@ -82,20 +81,37 @@ export function createRAGTools() {
   return {
     // 1. Semantic menu search (Pinecone + Supabase)
     search_menu: tool({
-      description: "Search menu by natural language query.",
+      description: "Search menu by natural language query with optional dietary filters.",
       inputSchema: z.object({
-        query: z.string().describe("Natural language food query"),
-        limit: z.number().optional().default(4).describe("Max results (use 3 for image searches)"),
-        max_price: z.number().optional().describe("Max price in dollars e.g. 12 for under $12"),
-        min_price: z.number().optional().describe("Min price in dollars"),
+        query: z.string().describe("Food search query"),
+        limit: z.number().optional().default(4),
+        max_price: z.number().optional(),
+        min_price: z.number().optional(),
+        vegan: z.boolean().optional().describe("Only vegan items"),
+        vegetarian: z.boolean().optional().describe("Only vegetarian items"),
+        glutenFree: z.boolean().optional().describe("Only gluten-free items"),
       }),
-      execute: async ({ query, limit, max_price, min_price }) => {
-        console.log(`[search_menu] "${query}" limit:${limit} maxPrice:${max_price}`);
+      execute: async ({ query, limit, max_price, min_price, vegan, vegetarian, glutenFree }) => {
+        console.log(`[search_menu] "${query}" limit:${limit} maxPrice:${max_price} vegan:${vegan} vegetarian:${vegetarian} glutenFree:${glutenFree}`);
         const priceFilter: PriceFilter | undefined =
           max_price !== undefined || min_price !== undefined
             ? { maxDollars: max_price, minDollars: min_price }
             : undefined;
-        const results = await semanticSearch(query, limit, priceFilter);
+        let results = await semanticSearch(query, limit * 2, priceFilter); // Fetch extra to account for filtering
+
+        // Apply dietary filters
+        if (vegan) {
+          results = results.filter((r) => r.isVegan === true);
+        } else if (vegetarian) {
+          results = results.filter((r) => r.isVegetarian === true);
+        }
+        if (glutenFree) {
+          results = results.filter((r) => r.isGlutenFree === true);
+        }
+
+        // Trim to requested limit after filtering
+        results = results.slice(0, limit);
+
         if (results.length === 0) return { found: false, message: "No items match that search." };
         const items = results.map((r) => toMinimalItem(r, getItemDisplayExtras(r.slug)));
         return { found: true, items };
@@ -119,16 +135,45 @@ export function createRAGTools() {
 
     // 3. Category items (Supabase)
     get_category_items: tool({
-      description: "List all items in a menu category.",
+      description: "List all items in a menu category. Use exact slugs: burgers, pizza, pasta-and-noodles, salads, soups, appetizers, desserts, seafood, steaks-and-grills.",
       inputSchema: z.object({
-        categorySlug: z.string().describe("Category slug, e.g. burgers, pizza, pasta"),
+        categorySlug: z.string().describe("Exact category slug: burgers | pizza | pasta-and-noodles | salads | soups | appetizers | desserts | seafood | steaks-and-grills"),
       }),
       execute: async ({ categorySlug }) => {
-        console.log(`[get_category_items] "${categorySlug}"`);
-        const rawItems = await getCategoryItemsFromSupabase(categorySlug);
-        if (rawItems.length === 0) return { found: false, message: `No items in "${categorySlug}".` };
+        // Normalize slug — Gemini sometimes uses singular/wrong forms
+        const SLUG_MAP: Record<string, string> = {
+          "salad": "salads",
+          "pasta": "pasta-and-noodles",
+          "noodle": "pasta-and-noodles",
+          "noodles": "pasta-and-noodles",
+          "steak": "steaks-and-grills",
+          "steaks": "steaks-and-grills",
+          "grill": "steaks-and-grills",
+          "grills": "steaks-and-grills",
+          "steak-and-grill": "steaks-and-grills",
+          "appetizer": "appetizers",
+          "starter": "appetizers",
+          "starters": "appetizers",
+          "soup": "soups",
+          "dessert": "desserts",
+          "burger": "burgers",
+          "sea-food": "seafood",
+          "sandwich": "appetizers", // fallback — no sandwich category
+          "sandwiches": "appetizers",
+        };
+        const normalized = SLUG_MAP[categorySlug.toLowerCase()] ?? categorySlug.toLowerCase();
+        console.log(`[get_category_items] "${categorySlug}" → normalized: "${normalized}"`);
+
+        let rawItems = await getCategoryItemsFromSupabase(normalized);
+
+        // Fallback: try original if normalization returned nothing
+        if (rawItems.length === 0 && normalized !== categorySlug) {
+          rawItems = await getCategoryItemsFromSupabase(categorySlug);
+        }
+
+        if (rawItems.length === 0) return { found: false, message: `No items in "${normalized}". Available: burgers, pizza, pasta-and-noodles, salads, soups, appetizers, desserts, seafood, steaks-and-grills` };
         const items = rawItems.map((r) => toMinimalItem(r, getItemDisplayExtras(r.slug)));
-        return { found: true, items };
+        return { found: true, category: normalized, items };
       },
     }),
 
@@ -136,7 +181,7 @@ export function createRAGTools() {
     get_popular_items: tool({
       description: "Get top-rated popular menu items.",
       inputSchema: z.object({
-        limit: z.number().optional().default(6).describe("Max items"),
+        limit: z.number().optional().default(6),
       }),
       execute: async ({ limit }) => {
         console.log(`[get_popular_items] limit:${limit}`);
@@ -150,7 +195,7 @@ export function createRAGTools() {
     get_modifiers: tool({
       description: "Get customization options for an item.",
       inputSchema: z.object({
-        itemSlug: z.string().describe("Menu item slug"),
+        itemSlug: z.string(),
       }),
       execute: async ({ itemSlug }) => {
         console.log(`[get_modifiers] "${itemSlug}"`);
@@ -201,9 +246,9 @@ export function createRAGTools() {
       inputSchema: z.object({
         items: z.array(
           z.object({
-            slug: z.string().describe("Menu item slug"),
-            quantity: z.number().min(1).default(1).describe("Quantity"),
-            modifierIds: z.array(z.number()).optional().describe("Modifier IDs from get_modifiers"),
+            slug: z.string(),
+            quantity: z.number().min(1).default(1),
+            modifierIds: z.array(z.number()).optional(),
           })
         ),
       }),
@@ -265,7 +310,7 @@ export function createRAGTools() {
     get_restaurant_info: tool({
       description: "Get restaurant hours, location, delivery, or promotions.",
       inputSchema: z.object({
-        topic: z.string().describe("Info topic: hours, location, delivery, about, contact, promotions, deals"),
+        topic: z.string().describe("hours, location, delivery, contact, promotions"),
       }),
       execute: async ({ topic }) => {
         console.log(`[get_restaurant_info] "${topic}"`);
@@ -285,7 +330,7 @@ export function createRAGTools() {
     get_dietary_guide: tool({
       description: "Get dietary recommendations for specific diets.",
       inputSchema: z.object({
-        diet: z.string().describe("Diet: keto, vegan, vegetarian, gluten-free, dairy-free, nut-free"),
+        diet: z.string().describe("keto, vegan, vegetarian, gluten-free, dairy-free"),
       }),
       execute: async ({ diet }) => {
         console.log(`[get_dietary_guide] "${diet}"`);
@@ -299,7 +344,7 @@ export function createRAGTools() {
     get_order_history: tool({
       description: "Get user's past orders for reorder.",
       inputSchema: z.object({
-        limit: z.number().optional().default(5).describe("Max orders"),
+        limit: z.number().optional().default(5),
       }),
       execute: async ({ limit }) => {
         console.log(`[get_order_history] limit:${limit}`);
@@ -330,7 +375,7 @@ export function createRAGTools() {
     remove_from_cart: tool({
       description: "Remove an item from the cart by its slug.",
       inputSchema: z.object({
-        slug: z.string().describe("Menu item slug to remove from cart"),
+        slug: z.string(),
       }),
       execute: async ({ slug }) => {
         console.log(`[remove_from_cart] "${slug}"`);
