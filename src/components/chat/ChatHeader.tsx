@@ -90,6 +90,7 @@ export default function ChatHeader({
         <div className="relative">
           <button
             onClick={() => setShowLangPicker(!showLangPicker)}
+            aria-label="Select language"
             className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
           >
             <Globe className="w-4 h-4" />
@@ -137,6 +138,7 @@ export default function ChatHeader({
         {/* Minimize */}
         <button
           onClick={onMinimize}
+          aria-label="Minimize chat"
           className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
         >
           <Minus className="w-3.5 h-3.5" />
@@ -145,6 +147,7 @@ export default function ChatHeader({
         {/* Close */}
         <button
           onClick={onClose}
+          aria-label="Close chat"
           className="p-2 text-slate-400 hover:text-red-400 transition-colors rounded-lg hover:bg-white/10"
         >
           <X className="w-3.5 h-3.5" />
