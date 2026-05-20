@@ -59,6 +59,8 @@ export default function ChatMessages({
       {/* Loading indicator */}
       {isLoading && (
         <motion.div
+          role="status"
+          aria-label="AI is typing"
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           className="flex justify-start gap-2"

@@ -92,7 +92,7 @@ export default function CheckoutModal({ cart, onClose, onOrderPlaced }: Checkout
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-700">
           <h2 className="text-lg font-semibold">Confirm Order</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button aria-label="Close" onClick={onClose} className="text-slate-400 hover:text-slate-600">
             &times;
           </button>
         </div>

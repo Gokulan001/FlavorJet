@@ -46,6 +46,7 @@ export default function ChatInput({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={uploadedImage} alt="Upload" className="h-14 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm" />
             <button
+              aria-label="Remove image"
               onClick={() => {
                 onClearImage();
                 if (fileInputRef.current) fileInputRef.current.value = "";
@@ -70,6 +71,7 @@ export default function ChatInput({
         {/* Image upload */}
         <button
           type="button"
+          aria-label="Upload image"
           onClick={() => fileInputRef.current?.click()}
           className="p-2.5 text-slate-400 hover:text-[#fea116] transition-colors rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/50 flex-shrink-0"
         >
@@ -95,6 +97,7 @@ export default function ChatInput({
         {/* Mic button */}
         <button
           type="button"
+          aria-label={isListening ? "Stop listening" : "Start voice input"}
           onClick={onToggleMic}
           className={`p-2.5 rounded-lg transition-all flex-shrink-0 ${
             isListening
@@ -108,10 +111,11 @@ export default function ChatInput({
         {/* Send button */}
         <button
           type="submit"
+          aria-label={isLoading ? "Sending" : "Send message"}
           disabled={isLoading || (!value.trim() && !uploadedImage)}
           className="p-2.5 bg-gradient-to-r from-[#fea116] to-[#e89000] text-slate-900 rounded-lg hover:shadow-lg hover:shadow-[#fea116]/30 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0 font-semibold"
         >
-          {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {isLoading ? <Loader2 data-testid="send-spinner" className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </button>
       </form>
     </div>

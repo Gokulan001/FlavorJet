@@ -99,6 +99,7 @@ export default function CartItemEditModal({ item, onClose, onRefreshCart }: Cart
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{formatPrice(item.unitPrice)} each</p>
               </div>
               <button
+                aria-label="Close"
                 onClick={onClose}
                 className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               >
@@ -114,6 +115,7 @@ export default function CartItemEditModal({ item, onClose, onRefreshCart }: Cart
                 </label>
                 <div className="flex items-center gap-4 bg-slate-100 dark:bg-slate-800 rounded-xl p-3 w-fit">
                   <button
+                    aria-label="Decrease quantity"
                     onClick={() => setQty((q) => Math.max(0, q - 1))}
                     className="flex h-8 w-8 items-center justify-center rounded-lg bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors font-semibold"
                   >
@@ -123,6 +125,7 @@ export default function CartItemEditModal({ item, onClose, onRefreshCart }: Cart
                     {qty}
                   </span>
                   <button
+                    aria-label="Increase quantity"
                     onClick={() => setQty((q) => q + 1)}
                     className="flex h-8 w-8 items-center justify-center rounded-lg bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors font-semibold"
                   >

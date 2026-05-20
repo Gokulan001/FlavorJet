@@ -96,6 +96,7 @@ export default function AIPageHeader({
         {/* Language Picker */}
         <div className="relative">
           <button
+            aria-label="Select language"
             onClick={() => setShowLangPicker(!showLangPicker)}
             className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors rounded-lg hover:bg-slate-100 dark:hover:bg-white/10"
           >

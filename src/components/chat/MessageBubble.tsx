@@ -238,7 +238,7 @@ export default function MessageBubble({
           >
             {isUser ? text : <FormatText text={text || "Check out these options:"} />}
             {isStreaming && (
-              <span className="inline-block w-1.5 h-4 ml-0.5 bg-[#fea116] animate-pulse rounded-full align-text-bottom opacity-60" />
+              <span data-testid="streaming-cursor" className="inline-block w-1.5 h-4 ml-0.5 bg-[#fea116] animate-pulse rounded-full align-text-bottom opacity-60" />
             )}
           </div>
         )}
@@ -292,7 +292,7 @@ export default function MessageBubble({
               className="w-7 h-7 rounded-full object-cover border-2 border-[#fea116]/30"
             />
           ) : (
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center">
+            <div data-testid="user-icon-fallback" className="w-7 h-7 rounded-full bg-gradient-to-br from-slate-600 to-slate-700 flex items-center justify-center">
               <User className="w-3.5 h-3.5 text-white" />
             </div>
           )}
