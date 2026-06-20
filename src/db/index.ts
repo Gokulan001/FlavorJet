@@ -3,7 +3,10 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema";
 import path from "path";
 
-const dbPath = path.join(process.cwd(), "data", "flavorjet.db");
+// Default to <cwd>/data/flavorjet.db; allow an absolute override so processes
+// launched outside the project root (e.g. the MCP server spawned by Claude
+// Desktop) can still locate the database.
+const dbPath = process.env.FLAVORJET_DB_PATH || path.join(process.cwd(), "data", "flavorjet.db");
 
 // In dev mode, Next.js HMR re-evaluates modules on every change.
 // Without globalThis caching, each reload creates a NEW Database() connection,
