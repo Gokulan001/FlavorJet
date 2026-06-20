@@ -70,3 +70,7 @@ tasks/
 /MCP_INTERVIEW_NOTES.md
 /MCP_PLAN.md
 /MCP_PREBUILT_README.md
+
+# mcp-host local sandbox (filesystem server working dir, not source)
+packages/mcp-host/sandbox/
+/MCP_PREBUILT_README.md

@@ -505,7 +505,6 @@ export function createServer() {
   );
 
 
-
   server.registerTool(
     "place_order",
     {
@@ -643,6 +642,49 @@ export function createServer() {
       return {
         content: [{ type: "text", text: `Re-added order #${orderId}'s items to your cart. View it or place the order.` }],
       };
+    },
+  );
+
+  server.registerTool(
+    "recommend_meal",
+    {
+      title: "Recommend a Meal",
+      description:
+        "Ask the AI to suggest a meal from the FlavorJet menu based on a preference or craving. " +
+        "Uses the host's LLM via MCP sampling to generate a personalised recommendation.",
+      inputSchema: {
+        preference: z.string().describe(
+          "What the user is in the mood for, e.g. 'something spicy', 'vegetarian', 'comfort food'",
+        ),
+      },
+    },
+    async ({ preference }) => {
+      const categories = await menu.getCategoriesLocal();
+      const categoryList = categories.map((c) => c.name).join(", ");
+
+      const result = await server.server.createMessage({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text:
+                `The FlavorJet menu has these categories: ${categoryList}. ` +
+                `Suggest one specific dish for someone who wants: "${preference}". ` +
+                `Give the dish name, one sentence why it fits, and the category it's in.`,
+            },
+          },
+        ],
+        maxTokens: 200,
+        systemPrompt: "You are a food critic. Be opinionated.",
+      });
+
+      const text =
+        result.content.type === "text"
+          ? result.content.text
+          : "Could not generate a recommendation.";
+
+      return { content: [{ type: "text", text }] };
     },
   );
 
