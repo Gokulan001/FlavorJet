@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -64,3 +65,8 @@ tasks/
 
 # code-review-graph
 .code-review-graph/
+
+# mcp personal notes (recall/planning docs, not part of the repo)
+/MCP_INTERVIEW_NOTES.md
+/MCP_PLAN.md
+/MCP_PREBUILT_README.md

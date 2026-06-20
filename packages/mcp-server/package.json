@@ -1,0 +1,16 @@
+{
+  "name": "@flavorjet/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server exposing FlavorJet's ordering domain (tools + resources + prompts + elicitation) over stdio.",
+  "scripts": {
+    "start": "tsx src/stdio.ts",
+    "inspect": "npx @modelcontextprotocol/inspector tsx src/stdio.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "dotenv": "^17.3.1",
+    "zod": "^3.25.0"
+  }
+}

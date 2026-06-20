@@ -1,15 +1,19 @@
 "use server";
 
+// Thin server-action wrappers over the framework-agnostic domain core
+// (src/lib/core/cart.ts + orders.ts). Responsibilities kept HERE at the edge:
+//   • identity — resolve userId from the session cookie (requireUser)
+//   • Next cache — revalidatePath / redirect
+// All cart/order business logic lives in the core, shared with the MCP server.
+
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { verifyAuthAndRefresh } from "@/lib/auth";
 import { db } from "@/db";
-import {
-  cartItems, cartItemModifiers, menuItems, modifiers, modifierGroups,
-  orders, orderItems, orderItemModifiers, users, categories,
-} from "@/db/schema";
-import { eq, and, sql } from "drizzle-orm";
-import { withTransaction } from "@/lib/db/transaction";
+import { menuItems, users } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import * as cartCore from "@/lib/core/cart";
+import * as ordersCore from "@/lib/core/orders";
 
 // ── Helper: single auth check per action (uses cookie-refreshing version) ────
 async function requireUser() {
@@ -22,135 +26,24 @@ async function requireUser() {
 export async function getCart() {
   const userId = await requireUser();
   if (!userId) return [];
-
-  try {
-    const items = db
-      .select({
-        id: cartItems.id,
-        quantity: cartItems.quantity,
-        specialInstructions: cartItems.specialInstructions,
-        menuItemId: cartItems.menuItemId,
-        itemName: menuItems.name,
-        itemSlug: menuItems.slug,
-        itemPrice: menuItems.price,
-        itemImage: menuItems.imageUrl,
-        categoryId: menuItems.categoryId,
-        categorySlug: categories.slug,
-      })
-      .from(cartItems)
-      .innerJoin(menuItems, eq(cartItems.menuItemId, menuItems.id))
-      .innerJoin(categories, eq(menuItems.categoryId, categories.id))
-      .where(eq(cartItems.userId, userId))
-      .all();
-
-    const result = items.map((item) => {
-      const itemModifiers = db
-        .select({
-          id: modifiers.id,
-          name: modifiers.name,
-          priceAdjustment: modifiers.priceAdjustment,
-          groupName: modifierGroups.name,
-        })
-        .from(cartItemModifiers)
-        .innerJoin(modifiers, eq(cartItemModifiers.modifierId, modifiers.id))
-        .innerJoin(modifierGroups, eq(modifiers.modifierGroupId, modifierGroups.id))
-        .where(eq(cartItemModifiers.cartItemId, item.id))
-        .all();
-
-      const modifierTotal = itemModifiers.reduce((sum, m) => sum + m.priceAdjustment, 0);
-
-      return {
-        ...item,
-        modifiers: itemModifiers,
-        unitPrice: item.itemPrice + modifierTotal,
-        lineTotal: (item.itemPrice + modifierTotal) * item.quantity,
-      };
-    });
-
-    return result;
-  } catch {
-    return [];
-  }
+  return cartCore.getCart(userId);
 }
 
 // ── Get Cart Count ───────────────────────────────────────────────────────────
 export async function getCartCount() {
   const userId = await requireUser();
   if (!userId) return 0;
-
-  try {
-    const result = db
-      .select({ total: sql<number>`SUM(${cartItems.quantity})` })
-      .from(cartItems)
-      .where(eq(cartItems.userId, userId))
-      .get();
-    return result?.total ?? 0;
-  } catch {
-    return 0;
-  }
+  return cartCore.getCartCount(userId);
 }
 
 // ── Add to Cart ──────────────────────────────────────────────────────────────
-// If an item with the exact same modifiers already exists, increase quantity.
-// If modifiers differ, add as a new cart item.
 export async function addToCart(menuItemId: number, quantity: number = 1, modifierIds: number[] = []) {
   const userId = await requireUser();
   if (!userId) return { error: "not_authenticated" };
 
-  try {
-    const sortedMods = [...modifierIds].sort((a, b) => a - b);
-
-    // Check existing cart items for this menu item
-    const existing = db
-      .select()
-      .from(cartItems)
-      .where(and(eq(cartItems.userId, userId), eq(cartItems.menuItemId, menuItemId)))
-      .all();
-
-    // Find one with exact same modifiers
-    const match = existing.find((item) => {
-      const itemMods = db
-        .select({ modifierId: cartItemModifiers.modifierId })
-        .from(cartItemModifiers)
-        .where(eq(cartItemModifiers.cartItemId, item.id))
-        .all()
-        .map((m) => m.modifierId)
-        .sort((a, b) => a - b);
-
-      if (itemMods.length !== sortedMods.length) return false;
-      return itemMods.every((id, i) => id === sortedMods[i]);
-    });
-
-    // Atomic: insert cart item + modifiers in one transaction
-    withTransaction(() => {
-      if (match) {
-        // Same item + same modifiers → just bump quantity
-        db.update(cartItems)
-          .set({ quantity: match.quantity + quantity })
-          .where(eq(cartItems.id, match.id))
-          .run();
-      } else {
-        // Different modifiers → new cart item
-        const cartItem = db.insert(cartItems).values({
-          userId,
-          menuItemId,
-          quantity,
-        }).returning({ id: cartItems.id }).get();
-
-        for (const modId of modifierIds) {
-          db.insert(cartItemModifiers).values({
-            cartItemId: cartItem.id,
-            modifierId: modId,
-          }).run();
-        }
-      }
-    });
-
-    revalidatePath("/", "layout");
-    return { success: true };
-  } catch {
-    return { error: "Failed to add item to cart" };
-  }
+  const result = await cartCore.addToCart(userId, menuItemId, quantity, modifierIds);
+  if (!("error" in result)) revalidatePath("/", "layout");
+  return result;
 }
 
 // ── Add to Cart by Slug (AI card quick-add) ──────────────────────────────────
@@ -169,65 +62,25 @@ export async function quickAddToCart(menuItemId: number) {
   const userId = await requireUser();
   if (!userId) return { error: "not_authenticated" };
 
-  try {
-    const existing = db
-      .select()
-      .from(cartItems)
-      .where(and(eq(cartItems.userId, userId), eq(cartItems.menuItemId, menuItemId)))
-      .all();
-
-    const noModItem = existing.find((item) => {
-      const mods = db.select().from(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, item.id)).all();
-      return mods.length === 0;
-    });
-
-    if (noModItem) {
-      db.update(cartItems).set({ quantity: noModItem.quantity + 1 }).where(eq(cartItems.id, noModItem.id)).run();
-    } else {
-      db.insert(cartItems).values({ userId, menuItemId, quantity: 1 }).run();
-    }
-
-    revalidatePath("/", "layout");
-    return { success: true };
-  } catch {
-    return { error: "Failed to add item to cart" };
-  }
+  const result = await cartCore.quickAddToCart(userId, menuItemId);
+  if (!("error" in result)) revalidatePath("/", "layout");
+  return result;
 }
 
 // ── Update Quantity ──────────────────────────────────────────────────────────
 export async function updateCartQuantity(cartItemId: number, quantity: number) {
   const userId = await requireUser();
   if (!userId) return;
-
-  try {
-    if (quantity <= 0) {
-      db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, cartItemId)).run();
-      db.delete(cartItems).where(and(eq(cartItems.id, cartItemId), eq(cartItems.userId, userId))).run();
-    } else {
-      db.update(cartItems).set({ quantity }).where(and(eq(cartItems.id, cartItemId), eq(cartItems.userId, userId))).run();
-    }
-
-    revalidatePath("/cart");
-  } catch {
-    // prevent hang
-  }
+  await cartCore.updateCartQuantity(userId, cartItemId, quantity);
+  revalidatePath("/cart");
 }
 
 // ── Update Special Instructions ──────────────────────────────────────────────
 export async function updateSpecialInstructions(cartItemId: number, instructions: string) {
   const userId = await requireUser();
   if (!userId) return;
-
-  try {
-    db.update(cartItems)
-      .set({ specialInstructions: instructions || null })
-      .where(and(eq(cartItems.id, cartItemId), eq(cartItems.userId, userId)))
-      .run();
-
-    revalidatePath("/cart");
-  } catch {
-    // prevent hang
-  }
+  await cartCore.updateSpecialInstructions(userId, cartItemId, instructions);
+  revalidatePath("/cart");
 }
 
 // ── Remove from Cart by Slug (AI assistant) ──────────────────────────────────
@@ -235,47 +88,17 @@ export async function removeFromCartBySlug(slug: string) {
   const userId = await requireUser();
   if (!userId) return { error: "not_authenticated" };
 
-  try {
-    const item = db
-      .select({ id: menuItems.id })
-      .from(menuItems)
-      .where(eq(menuItems.slug, slug))
-      .get();
-    if (!item) return { error: "item_not_found" };
-
-    const userCartItems = db
-      .select({ id: cartItems.id })
-      .from(cartItems)
-      .where(and(eq(cartItems.userId, userId), eq(cartItems.menuItemId, item.id)))
-      .all();
-
-    if (userCartItems.length === 0) return { error: "item_not_in_cart" };
-
-    for (const ci of userCartItems) {
-      db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
-      db.delete(cartItems).where(eq(cartItems.id, ci.id)).run();
-    }
-
-    revalidatePath("/", "layout");
-    return { success: true };
-  } catch {
-    return { error: "Failed to remove item from cart" };
-  }
+  const result = await cartCore.removeFromCartBySlug(userId, slug);
+  if (!("error" in result)) revalidatePath("/", "layout");
+  return result;
 }
 
 // ── Remove from Cart ─────────────────────────────────────────────────────────
 export async function removeFromCart(cartItemId: number) {
   const userId = await requireUser();
   if (!userId) return;
-
-  try {
-    db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, cartItemId)).run();
-    db.delete(cartItems).where(and(eq(cartItems.id, cartItemId), eq(cartItems.userId, userId))).run();
-
-    revalidatePath("/", "layout");
-  } catch {
-    // prevent hang
-  }
+  await cartCore.removeFromCart(userId, cartItemId);
+  revalidatePath("/", "layout");
 }
 
 // ── Place Order ──────────────────────────────────────────────────────────────
@@ -283,65 +106,11 @@ export async function placeOrder(deliveryAddress?: string, deliveryPhone?: strin
   const userId = await requireUser();
   if (!userId) redirect("/login");
 
-  try {
-    const cart = await getCart();
-    if (cart.length === 0) return { error: "Cart is empty" };
+  const result = await ordersCore.placeOrder(userId, deliveryAddress, deliveryPhone, tip);
+  if ("error" in result) return result;
 
-    const subtotal = cart.reduce((sum, item) => sum + item.lineTotal, 0);
-    const tipAmount = tip ?? 0;
-    const total = subtotal + tipAmount;
-
-    const estimatedMinutes = 25 + Math.floor(Math.random() * 20);
-
-    // Atomic: create order + items + modifiers + clear cart in one transaction
-    const orderId = withTransaction(() => {
-      const order = db.insert(orders).values({
-        userId,
-        status: "confirmed",
-        total,
-        deliveryAddress: deliveryAddress || null,
-        deliveryPhone: deliveryPhone || null,
-        tip: tipAmount,
-        estimatedMinutes,
-      }).returning({ id: orders.id }).get();
-
-      for (const item of cart) {
-        const orderItem = db.insert(orderItems).values({
-          orderId: order.id,
-          menuItemId: item.menuItemId,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          itemName: item.itemName,
-          specialInstructions: item.specialInstructions || null,
-        }).returning({ id: orderItems.id }).get();
-
-        for (const mod of item.modifiers) {
-          db.insert(orderItemModifiers).values({
-            orderItemId: orderItem.id,
-            modifierId: mod.id,
-            modifierName: mod.name,
-            priceAdjustment: mod.priceAdjustment,
-          }).run();
-        }
-      }
-
-      // Clear cart (inside transaction — rolls back if anything above fails)
-      const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
-      for (const ci of userCartItems) {
-        db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
-      }
-      db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
-
-      return order.id;
-    });
-
-    revalidatePath("/", "layout");
-    redirect(`/orders/${orderId}`);
-  } catch (e) {
-    // redirect() throws a special NEXT_REDIRECT error — must re-throw it
-    if (e && typeof e === "object" && "digest" in e) throw e;
-    return { error: "Failed to place order" };
-  }
+  revalidatePath("/", "layout");
+  redirect(`/orders/${result.orderId}`);
 }
 
 // ── Place Order from AI (no redirect, returns orderId) ───────────────────────
@@ -349,76 +118,11 @@ export async function placeOrderFromAI(tip?: number) {
   const userId = await requireUser();
   if (!userId) return { error: "Not authenticated" };
 
-  try {
-    const cart = await getCart();
-    if (cart.length === 0) return { error: "Cart is empty" };
+  const result = await ordersCore.placeOrderFromAI(userId, tip);
+  if ("error" in result) return result;
 
-    // Get user's saved address
-    const userData = db.select({
-      street: users.street,
-      apartment: users.apartment,
-      city: users.city,
-      zipCode: users.zipCode,
-      phone: users.phone,
-    }).from(users).where(eq(users.id, userId)).get();
-
-    if (!userData?.street) return { error: "No saved delivery address" };
-
-    const deliveryAddress = `${userData.street}${userData.apartment ? `, ${userData.apartment}` : ""}, ${userData.city} ${userData.zipCode}`;
-    const deliveryPhone = userData.phone || null;
-
-    const subtotal = cart.reduce((sum, item) => sum + item.lineTotal, 0);
-    const tipAmount = tip ?? 0;
-    const total = subtotal + tipAmount;
-    const estimatedMinutes = 25 + Math.floor(Math.random() * 20);
-
-    // Atomic: create order + items + modifiers + clear cart
-    const orderId = withTransaction(() => {
-      const order = db.insert(orders).values({
-        userId,
-        status: "confirmed",
-        total,
-        deliveryAddress,
-        deliveryPhone,
-        tip: tipAmount,
-        estimatedMinutes,
-      }).returning({ id: orders.id }).get();
-
-      for (const item of cart) {
-        const orderItem = db.insert(orderItems).values({
-          orderId: order.id,
-          menuItemId: item.menuItemId,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          itemName: item.itemName,
-          specialInstructions: item.specialInstructions || null,
-        }).returning({ id: orderItems.id }).get();
-
-        for (const mod of item.modifiers) {
-          db.insert(orderItemModifiers).values({
-            orderItemId: orderItem.id,
-            modifierId: mod.id,
-            modifierName: mod.name,
-            priceAdjustment: mod.priceAdjustment,
-          }).run();
-        }
-      }
-
-      // Clear cart (inside transaction)
-      const userCartItems = db.select({ id: cartItems.id }).from(cartItems).where(eq(cartItems.userId, userId)).all();
-      for (const ci of userCartItems) {
-        db.delete(cartItemModifiers).where(eq(cartItemModifiers.cartItemId, ci.id)).run();
-      }
-      db.delete(cartItems).where(eq(cartItems.userId, userId)).run();
-
-      return order.id;
-    });
-
-    revalidatePath("/", "layout");
-    return { orderId, estimatedMinutes };
-  } catch {
-    return { error: "Failed to place order" };
-  }
+  revalidatePath("/", "layout");
+  return { orderId: result.orderId, estimatedMinutes: result.estimatedMinutes };
 }
 
 // ── Reorder ──────────────────────────────────────────────────────────────────
@@ -426,79 +130,25 @@ export async function reorderFromOrder(orderId: number) {
   const userId = await requireUser();
   if (!userId) redirect("/login");
 
-  try {
-    const order = db.select().from(orders)
-      .where(and(eq(orders.id, orderId), eq(orders.userId, userId))).get();
-    if (!order) return { error: "Order not found" };
+  const result = await ordersCore.reorderFromOrder(userId, orderId);
+  if ("error" in result) return result;
 
-    const items = db.select().from(orderItems).where(eq(orderItems.orderId, orderId)).all();
-
-    for (const item of items) {
-      const available = db.select().from(menuItems).where(eq(menuItems.id, item.menuItemId)).get();
-      if (!available || !available.isAvailable) continue;
-
-      const cartItem = db.insert(cartItems).values({
-        userId,
-        menuItemId: item.menuItemId,
-        quantity: item.quantity,
-        specialInstructions: item.specialInstructions || null,
-      }).returning({ id: cartItems.id }).get();
-
-      const itemMods = db.select().from(orderItemModifiers).where(eq(orderItemModifiers.orderItemId, item.id)).all();
-      for (const mod of itemMods) {
-        db.insert(cartItemModifiers).values({
-          cartItemId: cartItem.id,
-          modifierId: mod.modifierId,
-        }).run();
-      }
-    }
-
-    revalidatePath("/", "layout");
-    redirect("/cart");
-  } catch (e) {
-    if (e && typeof e === "object" && "digest" in e) throw e;
-    return { error: "Failed to reorder" };
-  }
+  revalidatePath("/", "layout");
+  redirect("/cart");
 }
 
 // ── Get Orders ───────────────────────────────────────────────────────────────
 export async function getOrders() {
   const userId = await requireUser();
   if (!userId) return [];
-
-  try {
-    return db
-      .select()
-      .from(orders)
-      .where(eq(orders.userId, userId))
-      .orderBy(sql`${orders.createdAt} DESC`)
-      .all();
-  } catch {
-    return [];
-  }
+  return ordersCore.getOrders(userId);
 }
 
 // ── Get Order by ID ──────────────────────────────────────────────────────────
 export async function getOrderById(orderId: number) {
   const userId = await requireUser();
   if (!userId) return null;
-
-  try {
-    const order = db.select().from(orders)
-      .where(and(eq(orders.id, orderId), eq(orders.userId, userId))).get();
-    if (!order) return null;
-
-    const items = db.select().from(orderItems).where(eq(orderItems.orderId, orderId)).all();
-
-    const itemsWithModifiers = items.map((item) => {
-      const mods = db.select().from(orderItemModifiers).where(eq(orderItemModifiers.orderItemId, item.id)).all();
-      return { ...item, modifiers: mods };
-    });
-
-    return { ...order, items: itemsWithModifiers };
-  } catch {
-    return null;
-  }
+  return ordersCore.getOrderById(userId, orderId);
 }
 
 // ── Save User Address ────────────────────────────────────────────────────────
