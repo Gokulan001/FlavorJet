@@ -114,7 +114,7 @@ for (const cfg of SERVERS) {
     const { messages, maxTokens, systemPrompt } = request.params;
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5",
       max_tokens: maxTokens ?? 512,
       system: systemPrompt,
       messages: messages.map((m) => ({
@@ -137,7 +137,7 @@ for (const cfg of SERVERS) {
     return {
       role: "assistant",
       content: { type: "text", text },
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5",
       stopReason: response.stop_reason ?? "end_turn",
     };
   });
@@ -181,7 +181,7 @@ console.error(`\nQuery: ${userQuery}\n`);
 while (true) {
   // Stream the response so text prints token by token.
   const stream = anthropic.messages.stream({
-    model: "claude-sonnet-4-6",
+    model: "claude-haiku-4-5",
     max_tokens: 4096,
     tools: anthropicTools,
     messages,
